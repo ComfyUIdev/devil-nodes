@@ -287,7 +287,8 @@ class Favorite extends LGraphNode {
       precision: 0,
     });
 
-    this.keypressBound = this.onKeypress.bind(this);
+    // One function reference for addEventListener and removeEventListener.
+    this.keypressBound = (event) => this.onKeypress(event);
     const computed = this.computeSize();
     this.size = [Math.max(220, computed[0]), computed[1]];
   }
