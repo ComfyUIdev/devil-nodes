@@ -1,6 +1,6 @@
 [project]
 name = "devil-nodes"
-version = "1.0.0"
+version = "1.0.1"
 description = "Canvas bookmarks for ComfyUI. Favorite jumps to a saved anchor with pan, zoom, offsets, and optional animation and blur."
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
