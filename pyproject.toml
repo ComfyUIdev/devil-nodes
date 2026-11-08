@@ -1,7 +1,7 @@
 [project]
 name = "devil-nodes"
 version = "1.0.1"
-description = "Canvas bookmarks for ComfyUI. Favorite jumps to a saved anchor with pan, zoom, offsets, and optional animation and blur."
+description = "ComfyUI nodes by ComfyUIdev. Favorite jumps to a saved canvas anchor. Workflow Helper is a shareable workflow card with a Markdown how-to, model downloads, and pack checks."
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
 authors = [{ name = "ComfyUIdev" }]
