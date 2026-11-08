@@ -5,6 +5,8 @@
 - Add Workflow Helper: a card saved in the workflow with a title, a Markdown how-to, model rows, custom node packs, and author links. Each model and pack row is marked installed or missing on the ComfyUI that opens the workflow.
 - Model Download buttons fetch the row URL (direct http(s), Hugging Face, Civitai, `hf://`, and `b2:` via rclone) into that row's models folder, with progress and errors on the card. Files are written only inside model directories ComfyUI already knows.
 - Banner layout shows the title alone, as a label. The pencil opens the editor; the card stays in view mode otherwise.
+- The model folder control is a dropdown of every built-in models folder plus any extra folders this ComfyUI reports. A saved folder that is not in that list stays selected.
+- The card fills the node body in the classic UI and in Nodes 2.0. The pencil, folder dropdown, download buttons, and saved card JSON work in both.
 
 ## 1.0.1 - 2026-11-08
 

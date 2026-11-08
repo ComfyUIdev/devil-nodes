@@ -5,8 +5,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   cardHasContent,
+  folderChoices,
   folderLabel,
   groupModels,
+  panelBox,
   matchFile,
   modelSource,
   mountMarkdown,
@@ -146,6 +148,33 @@ test("pack detection keeps custom packs and skips core modules", () => {
     { name: "SomePack", url: "", node: "First" },
     { name: "OtherPack", url: "", node: "Third" },
   ]);
+});
+
+test("folder dropdown lists every folder and keeps a saved one", () => {
+  const { options, selected } = folderChoices(
+    ["checkpoints", "custom_folder", "../nope", "loras"],
+    "my_saved_folder",
+  );
+  assert.equal(selected, "my_saved_folder");
+  assert.ok(options.includes("checkpoints"));
+  assert.ok(options.includes("loras"));
+  assert.ok(options.includes("vae"));
+  assert.ok(options.includes("custom_folder"));
+  assert.ok(options.includes("my_saved_folder"));
+  assert.equal(options.includes("../nope"), false);
+  assert.equal(options.indexOf("checkpoints") < options.indexOf("custom_folder"), true);
+  const fresh = folderChoices(["diffusion_models"], "");
+  assert.equal(fresh.selected, "checkpoints");
+  assert.equal(fresh.options.filter((folder) => folder === "checkpoints").length, 1);
+});
+
+test("the card box uses the rest of the node below the title", () => {
+  const filled = panelBox({ nodeWidth: 520, nodeHeight: 460, top: 36, contentMin: 120 });
+  assert.equal(filled.width, 520);
+  assert.equal(filled.height, 424);
+  const content = panelBox({ nodeWidth: 180, nodeHeight: 90, top: 36, contentMin: 200 });
+  assert.equal(content.width, 220);
+  assert.equal(content.height, 200);
 });
 
 test("markdown is mounted as text, including markup that must not run", () => {

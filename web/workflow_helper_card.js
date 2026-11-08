@@ -186,6 +186,44 @@ export function folderLabel(folder) {
 }
 
 /**
+ * Every folder the editor can offer. Built-in names come first, then any
+ * extra names this ComfyUI reports. The row's current folder stays in the
+ * list even when this install does not have it, so saving cannot drop it.
+ */
+export function folderChoices(installed, current) {
+  const options = [...MODEL_FOLDERS];
+  const seen = new Set(options);
+  for (const name of installed || []) {
+    const folder = clip(name, 80).trim();
+    if (!folder || seen.has(folder)) continue;
+    if (/[\\/\0]|\.\./.test(folder)) continue;
+    seen.add(folder);
+    options.push(folder);
+  }
+  const selected = clip(current, 80).trim() || "checkpoints";
+  if (!seen.has(selected)) options.push(selected);
+  return { options, selected };
+}
+
+/**
+ * Pixel box for the card inside a node. `top` is the widget's offset from
+ * the top of the node (the title bar, when the node height includes it).
+ * The card is at least `contentMin` tall and otherwise uses the rest of the
+ * node, so it does not sit in the corner of an empty body.
+ */
+export function panelBox({ nodeWidth, nodeHeight, top, contentMin }) {
+  const width = Math.max(220, Number(nodeWidth) || 0);
+  const min = Math.max(72, Number(contentMin) || 0);
+  const height = Number(nodeHeight) || 0;
+  const offset = Number.isFinite(top) && top > 0 ? top : 0;
+  const available = height - offset;
+  return {
+    width,
+    height: Math.max(min, available > 0 ? available : min),
+  };
+}
+
+/**
  * Match a row against ComfyUI's file list for one folder.
  * An exact relative path wins. Otherwise the file name matches anywhere
  * in that folder, case-insensitively.

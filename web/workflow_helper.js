@@ -12,8 +12,10 @@ import {
   MODEL_FOLDERS,
   ROW_LIMIT,
   cardHasContent,
+  folderChoices,
   folderLabel,
   groupModels,
+  panelBox,
   hostOf,
   matchFile,
   modelSource,
@@ -34,9 +36,9 @@ let defsPromise = null;
 let openEditor = null;
 
 const CSS = `
-.dh-root{box-sizing:border-box;width:100%;height:100%;padding:4px 6px 8px;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;}
+.dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;}
 .dh-root *{box-sizing:border-box;}
-.dh-card{display:flex;flex-direction:column;height:100%;min-height:72px;overflow:hidden;border:1px solid #5a3330;border-radius:8px;background:#1c1412;}
+.dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;}
 .dh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:0 0 10px;}
 .dh-head{position:relative;padding:12px 36px 10px 14px;border-left:4px solid #e25b45;}
 .dh-title{margin:0;color:#fff7f4;font-size:22px;font-weight:700;line-height:1.15;overflow-wrap:anywhere;}
@@ -86,7 +88,7 @@ const CSS = `
 .dh-chips{display:flex;flex-wrap:wrap;gap:6px;}
 .dh-chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border:1px solid #6a403c;border-radius:12px;background:#2a1c1a;color:#fff7f4;font-size:11px;text-decoration:none;}
 .dh-chip:hover{border-color:#e25b45;}
-.dh-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);}
+.dh-overlay{position:fixed;inset:0;z-index:200000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);}
 .dh-dialog{display:flex;flex-direction:column;width:min(880px,94vw);max-height:92vh;border:1px solid #6a403c;border-radius:10px;background:#1c1412;color:#f3ebe7;box-shadow:0 16px 50px rgba(0,0,0,.5);font:12px/1.4 system-ui,sans-serif;}
 .dh-dialog *{box-sizing:border-box;}
 .dh-dhead,.dh-dfoot{display:flex;align-items:center;gap:8px;padding:10px 14px;}
@@ -98,11 +100,12 @@ const CSS = `
 .dh-field > span{color:#c9b2ac;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;}
 .dh-hint,.dh-error{color:#b5a29c;font-size:11px;}
 .dh-error{color:#ffb1a3;}
-.dh-dialog input,.dh-dialog textarea,.dh-dialog select{width:100%;padding:6px 8px;border:1px solid #6a403c;border-radius:5px;background:#2a1c1a;color:#fff7f4;font:12px/1.4 system-ui,sans-serif;}
+.dh-dialog input,.dh-dialog textarea,.dh-dialog select{width:100%;padding:6px 8px;border:1px solid #6a403c;border-radius:5px;background-color:#2a1c1a;color:#fff7f4;font:12px/1.4 system-ui,sans-serif;}
+.dh-dialog select{cursor:pointer;appearance:none;padding-right:22px;background-image:linear-gradient(45deg,transparent 50%,#f0c2b8 50%),linear-gradient(135deg,#f0c2b8 50%,transparent 50%);background-position:calc(100% - 14px) 55%,calc(100% - 9px) 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;}
 .dh-dialog textarea{min-height:120px;resize:vertical;font:12px/1.45 ui-monospace,monospace;}
 .dh-table{display:flex;flex-direction:column;gap:4px;}
 .dh-trow{display:grid;gap:6px;align-items:center;}
-.dh-trow.models{grid-template-columns:minmax(110px,1.2fr) 110px minmax(140px,1.4fr) 72px minmax(90px,.8fr) 26px;}
+.dh-trow.models{grid-template-columns:minmax(110px,1.2fr) minmax(132px,.9fr) minmax(140px,1.4fr) 72px minmax(90px,.8fr) 26px;}
 .dh-trow.packs{grid-template-columns:minmax(110px,1fr) minmax(140px,1.3fr) minmax(120px,1fr) 26px;}
 .dh-trow.links{grid-template-columns:minmax(100px,.7fr) minmax(160px,1.5fr) 26px;}
 .dh-trow.head{color:#c9b2ac;font-size:10px;letter-spacing:.05em;text-transform:uppercase;}
@@ -147,9 +150,17 @@ function conceal(widget) {
   if (!widget) return;
   widget.hidden = true;
   widget.serialize = true;
+  widget.options = widget.options || {};
+  widget.options.hidden = true;
+  widget.options.serialize = true;
+  // Classic canvas and Nodes 2.0 both skip a widget that reports no layout.
   widget.computeSize = () => [0, -4];
+  widget.computeLayoutSize = () => ({ minHeight: 0, maxHeight: 0, minWidth: 0 });
   const box = widget.element || widget.inputEl;
-  if (box?.style) box.style.display = "none";
+  if (box?.style) {
+    box.style.display = "none";
+    box.hidden = true;
+  }
 }
 
 function readSource(node, info) {
@@ -160,14 +171,24 @@ function readSource(node, info) {
   return "{}";
 }
 
+function writeWidgetValue(node, widget, text) {
+  if (typeof widget.setValue === "function") {
+    try {
+      widget.setValue(text, { node });
+      return;
+    } catch {
+      // This frontend's setter only accepts the value.
+    }
+  }
+  widget.value = text;
+  widget.callback?.(text);
+}
+
 function writeCard(node, card) {
   const text = serializeCard(card);
   if (node.workflowHelper) node.workflowHelper.sourceText = text;
   const widget = cardWidget(node);
-  if (widget) {
-    widget.value = text;
-    widget.callback?.(text);
-  }
+  if (widget) writeWidgetValue(node, widget, text);
   node.properties = node.properties || {};
   node.properties.workflowHelper = text;
   node.setDirtyCanvas?.(true, true);
@@ -458,6 +479,106 @@ function sectionTitle(text) {
   return heading;
 }
 
+function vueNodes() {
+  if (globalThis.LiteGraph?.vueNodesMode === true) return true;
+  try {
+    return app.ui?.settings?.getSettingValue?.("Comfy.VueNodes.Enabled") === true;
+  } catch {
+    return false;
+  }
+}
+
+function cssId(value) {
+  const text = String(value ?? "");
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(text);
+  return text.replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function renderedBody(node) {
+  const id = cssId(node?.id);
+  if (!id || node.id == null || node.id === -1) return null;
+  const host = document.querySelector(`[data-node-id="${id}"]`);
+  if (!host) return null;
+  const hostRect = host.getBoundingClientRect();
+  if (hostRect.width < 40 || hostRect.height < 40) return null;
+  const header = host.querySelector("header");
+  const headerH = header ? header.getBoundingClientRect().height : 0;
+  return {
+    width: Math.max(200, hostRect.width - 8),
+    height: Math.max(48, hostRect.height - headerH),
+  };
+}
+
+function boxFor(state) {
+  const node = state.node;
+  const contentMin = preferredHeight(state.card);
+  const top = Number.isFinite(state.dom?.y) && state.dom.y > 4 ? state.dom.y : 40;
+  const fromSize = panelBox({
+    nodeWidth: node.size?.[0],
+    nodeHeight: node.size?.[1],
+    top: vueNodes() ? 40 : top,
+    contentMin,
+  });
+  if (!vueNodes()) return fromSize;
+  const rendered = renderedBody(node);
+  if (!rendered) return fromSize;
+  // Prefer the on-screen node body. If that element is still only as tall as
+  // the text and node.size is clearly taller, catch up to node.size once.
+  const height = rendered.height + 24 < fromSize.height
+    ? Math.max(contentMin, fromSize.height)
+    : Math.max(contentMin, rendered.height);
+  return {
+    width: Math.max(fromSize.width, rendered.width),
+    height,
+  };
+}
+
+function applyFill(state) {
+  const box = boxFor(state);
+  const root = state.root;
+  const previous = state.lastFill;
+  if (previous && Math.abs(previous.width - box.width) < 4 && Math.abs(previous.height - box.height) < 4) return;
+  state.lastFill = box;
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
+  root.style.alignSelf = "stretch";
+  root.style.justifySelf = "stretch";
+  root.style.flex = "1 1 auto";
+  root.style.boxSizing = "border-box";
+  root.style.width = "100%";
+  root.style.height = "100%";
+  if (vueNodes()) {
+    root.style.minWidth = `${box.width}px`;
+    root.style.minHeight = `${box.height}px`;
+    root.style.height = `${box.height}px`;
+  } else {
+    root.style.minWidth = "100%";
+    root.style.minHeight = "100%";
+  }
+}
+
+function watchHost(state) {
+  const id = cssId(state.node?.id);
+  const host = id && document.querySelector(`[data-node-id="${id}"]`);
+  if (!host || state.observed === host) return;
+  state.boxObserver?.disconnect();
+  state.boxObserver = new ResizeObserver(() => {
+    state.lastFill = null;
+    applyFill(state);
+  });
+  state.boxObserver.observe(host);
+  state.observed = host;
+}
+
+function scheduleFill(state) {
+  applyFill(state);
+  requestAnimationFrame(() => {
+    watchHost(state);
+    state.lastFill = null;
+    applyFill(state);
+  });
+}
+
 function renderCard(state) {
   const card = state.card;
   const root = state.root;
@@ -477,10 +598,14 @@ function renderCard(state) {
   head.append(edit);
   scroll.append(head);
 
-  if (card.layout === "banner") return;
+  if (card.layout === "banner") {
+    scheduleFill(state);
+    return;
+  }
 
   if (!cardHasContent(card)) {
     scroll.append(el("div", "dh-empty", "Click the pencil to add a title, a how-to, the models to download, the packs this workflow needs, and your links."));
+    scheduleFill(state);
     return;
   }
 
@@ -530,6 +655,7 @@ function renderCard(state) {
   }
 
   state.recheck(false);
+  scheduleFill(state);
 }
 
 async function checkInstall(state, fresh) {
@@ -691,18 +817,21 @@ async function openCardEditor(state, draftCard) {
   howTo.addEventListener("input", updatePreview);
   form.append(preview);
 
-  const listId = "dh-folder-list";
-  const dataList = el("datalist");
-  dataList.id = listId;
-  for (const folder of folderOptions) dataList.append(el("option", "", folder));
-  const folderInput = (value) => {
-    const input = textInput(value, "loras");
-    input.setAttribute("list", listId);
-    return input;
+  const folderMenu = (value) => {
+    const { options, selected } = folderChoices(folderOptions, value || "checkpoints");
+    const select = el("select");
+    for (const folder of options) {
+      const option = document.createElement("option");
+      option.value = folder;
+      option.textContent = folder;
+      select.append(option);
+    }
+    select.value = selected;
+    return select;
   };
   const models = editorTable("models", ["File", "Folder", "Download URL", "Size", "Note"], draft.models, (row) => [
     textInput(row.name, "model.safetensors"),
-    folderInput(row.folder || "checkpoints"),
+    folderMenu(row.folder || "checkpoints"),
     textInput(row.url, "https://huggingface.co/.../resolve/main/model.safetensors"),
     textInput(row.size, "1.2 GB"),
     textInput(row.note, "optional note"),
@@ -711,7 +840,6 @@ async function openCardEditor(state, draftCard) {
   addModel.type = "button";
   addModel.addEventListener("click", () => models.add({ folder: "checkpoints" }));
   form.append(field("Models", models.box, "Each row is a file, the models folder it belongs in, and a URL. Download fetches that URL into the folder. hf://, Hugging Face, Civitai, and other http(s) links work."), addModel);
-  form.append(dataList);
 
   const packs = editorTable("packs", ["Pack", "Link", "Probe node"], draft.packs, (row) => [
     textInput(row.name, "ComfyUI-Example"),
@@ -921,11 +1049,14 @@ function attach(node) {
     dispose() {
       for (const timer of state.timers.values()) clearInterval(timer);
       state.timers.clear();
+      state.boxObserver?.disconnect();
+      state.boxObserver = null;
+      state.observed = null;
       if (openEditor?.nodeId === node.id) closeEditor();
       node.workflowHelper = null;
     },
     height() {
-      return preferredHeight(state.card);
+      return boxFor(state).height;
     },
   };
   node.workflowHelper = state;
@@ -935,18 +1066,49 @@ function attach(node) {
       serialize: false,
       hideOnZoom: false,
       getMinHeight() {
-        return state.height();
+        return boxFor(state).height;
+      },
+      getHeight() {
+        return boxFor(state).height;
+      },
+      afterResize() {
+        state.lastFill = null;
+        applyFill(state);
       },
     });
     dom.serialize = false;
     if (dom.options) dom.options.serialize = false;
+    // Nodes 2.0 gives an auto grid row to widgets that report a layout size.
+    // The row then takes the rest of the node instead of the text's own height.
+    dom.computeLayoutSize = () => {
+      const box = boxFor(state);
+      return { minHeight: box.height, minWidth: Math.min(box.width, node.size?.[0] || box.width) };
+    };
+    dom.computeSize = (width) => {
+      const box = boxFor(state);
+      return [Math.max(width || 0, 220), box.height];
+    };
+    state.dom = dom;
   }
 
   renderCard(state);
   const width = Math.max(node.size?.[0] || 0, 480);
-  const height = Math.max(node.size?.[1] || 0, state.height() + 30);
-  node.setSize?.([width, height]);
+  const height = Math.max(node.size?.[1] || 0, preferredHeight(state.card) + 48);
+  if ((node.size?.[1] || 0) < 160 || (node.size?.[0] || 0) < 360) {
+    node.setSize?.([width, height]);
+  }
+  scheduleFill(state);
+  const previousAdded = node.onAdded;
+  node.onAdded = function workflowHelperAdded(...args) {
+    const result = typeof previousAdded === "function" ? previousAdded.apply(this, args) : undefined;
+    scheduleFill(state);
+    return result;
+  };
   return state;
+}
+
+function isHelper(node) {
+  return !!node && (node.comfyClass === NODE_TYPE || node.type === NODE_TYPE);
 }
 
 function after(proto, name, next) {
@@ -960,6 +1122,22 @@ function after(proto, name, next) {
 
 app.registerExtension({
   name: "devil-nodes.WorkflowHelper",
+  nodeCreated(node) {
+    if (isHelper(node)) attach(node);
+  },
+  loadedGraphNode(node) {
+    if (!isHelper(node)) return;
+    const state = node.workflowHelper || attach(node);
+    state.reload();
+    scheduleFill(state);
+  },
+  getNodeMenuItems(node) {
+    if (!isHelper(node)) return;
+    return [{
+      content: "Edit Workflow Helper",
+      callback: () => node.workflowHelper?.edit(),
+    }];
+  },
   beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name !== NODE_TYPE) return;
     after(nodeType.prototype, "onNodeCreated", function () {
@@ -968,6 +1146,7 @@ app.registerExtension({
     after(nodeType.prototype, "onConfigure", function (info) {
       const state = this.workflowHelper || attach(this);
       state.reload(info);
+      scheduleFill(state);
     });
     after(nodeType.prototype, "onSerialize", function (info) {
       if (!info || typeof info !== "object") return;
