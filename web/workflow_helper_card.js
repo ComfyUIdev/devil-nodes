@@ -240,6 +240,160 @@ export function matchFile(name, files) {
   return loose ? { found: true, path: loose } : { found: false, path: "" };
 }
 
+const MODEL_EXTENSIONS = [".safetensors", ".ckpt", ".pt", ".pt2", ".pth", ".bin", ".gguf", ".onnx", ".sft", ".pkl"];
+
+/** Widget names that always mean one models folder. Ambiguous names are omitted. */
+export const WIDGET_FOLDERS = {
+  ckpt_name: "checkpoints",
+  checkpoint_name: "checkpoints",
+  lora_name: "loras",
+  vae_name: "vae",
+  unet_name: "diffusion_models",
+  diffusion_model_name: "diffusion_models",
+  clip_name: "text_encoders",
+  clip_name1: "text_encoders",
+  clip_name2: "text_encoders",
+  clip_name3: "text_encoders",
+  clip_name4: "text_encoders",
+  control_net_name: "controlnet",
+  controlnet_name: "controlnet",
+  style_model_name: "style_models",
+  clip_vision_name: "clip_vision",
+  gligen_name: "gligen",
+  hypernetwork_name: "hypernetworks",
+  upscale_model_name: "upscale_models",
+  embedding_name: "embeddings",
+};
+
+/** Node class plus widget, for names that mean different folders on different loaders. */
+export const NODE_WIDGET_FOLDERS = {
+  "CheckpointLoaderSimple:ckpt_name": "checkpoints",
+  "CheckpointLoader:ckpt_name": "checkpoints",
+  "unCLIPCheckpointLoader:ckpt_name": "checkpoints",
+  "LoraLoader:lora_name": "loras",
+  "LoraLoaderModelOnly:lora_name": "loras",
+  "VAELoader:vae_name": "vae",
+  "UNETLoader:unet_name": "diffusion_models",
+  "CLIPLoader:clip_name": "text_encoders",
+  "DualCLIPLoader:clip_name1": "text_encoders",
+  "DualCLIPLoader:clip_name2": "text_encoders",
+  "TripleCLIPLoader:clip_name1": "text_encoders",
+  "TripleCLIPLoader:clip_name2": "text_encoders",
+  "TripleCLIPLoader:clip_name3": "text_encoders",
+  "CLIPVisionLoader:clip_name": "clip_vision",
+  "ControlNetLoader:control_net_name": "controlnet",
+  "DiffControlNetLoader:control_net_name": "controlnet",
+  "StyleModelLoader:style_model_name": "style_models",
+  "GLIGENLoader:gligen_name": "gligen",
+  "UpscaleModelLoader:model_name": "upscale_models",
+  "HypernetworkLoader:hypernetwork_name": "hypernetworks",
+  "PhotoMakerLoader:photomaker_model_name": "photomaker",
+};
+
+export function looksLikeModelFile(value) {
+  const text = String(value ?? "").trim().replace(/\\/g, "/");
+  if (!text || text.length > 240 || text.startsWith("/") || text.includes("\0")) return false;
+  const parts = text.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) return false;
+  const base = parts[parts.length - 1].toLowerCase();
+  return MODEL_EXTENSIONS.some((ext) => base.endsWith(ext));
+}
+
+function cleanFolder(value) {
+  const folder = clip(value, 80).trim();
+  if (!folder || /[\\/\0]|\.\./.test(folder)) return "";
+  return folder;
+}
+
+/** Options object from one object_info input, either `[files, options]` or `["COMBO", options]`. */
+export function inputConfig(def, widgetName) {
+  const groups = def?.input || {};
+  for (const group of ["required", "optional"]) {
+    const entry = groups[group]?.[widgetName];
+    if (!entry) continue;
+    if (Array.isArray(entry)) {
+      const config = entry.find((item) => item && typeof item === "object" && !Array.isArray(item));
+      return config || {};
+    }
+    if (typeof entry === "object") return entry;
+  }
+  return {};
+}
+
+function folderFromSpec(spec) {
+  if (!spec || typeof spec !== "object") return "";
+  const direct = spec.folder || spec.model_folder || spec.modelFolder;
+  const named = cleanFolder(direct);
+  if (named) return named;
+  const route = spec.remote?.route || spec.remote?.url || "";
+  const match = /\/models\/([A-Za-z0-9._-]+)\/?$/.exec(String(route));
+  return match ? cleanFolder(match[1]) : "";
+}
+
+export function folderForWidget({ nodeType, widgetName, spec }) {
+  const fromSpec = folderFromSpec(spec);
+  if (fromSpec) return fromSpec;
+  const typed = NODE_WIDGET_FOLDERS[`${nodeType || ""}:${widgetName || ""}`];
+  if (typed) return typed;
+  return WIDGET_FOLDERS[widgetName] || "";
+}
+
+function modelValues(value) {
+  if (typeof value !== "string") return [];
+  const text = value.trim();
+  if (!text) return [];
+  if (looksLikeModelFile(text)) return [text.replace(/\\/g, "/")];
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 1 && lines.every((line) => looksLikeModelFile(line))) {
+    return lines.map((line) => line.replace(/\\/g, "/"));
+  }
+  return [];
+}
+
+/** Model files selected on one node. `def` is that node type's object_info entry. */
+export function modelsFromNode({ type, widgets, def }) {
+  const found = [];
+  for (const widget of widgets || []) {
+    const folder = folderForWidget({
+      nodeType: type,
+      widgetName: widget?.name,
+      spec: inputConfig(def, widget?.name),
+    });
+    if (!folder) continue;
+    for (const name of modelValues(widget?.value)) found.push({ name, folder });
+  }
+  return found;
+}
+
+export function sameModel(existing, candidate) {
+  const folderA = String(existing?.folder || "").trim().toLowerCase();
+  const folderB = String(candidate?.folder || "").trim().toLowerCase();
+  if (!folderA || folderA !== folderB) return false;
+  const nameA = String(existing?.name || "").replace(/\\/g, "/").trim().toLowerCase();
+  const nameB = String(candidate?.name || "").replace(/\\/g, "/").trim().toLowerCase();
+  if (!nameA || !nameB) return false;
+  return nameA === nameB || baseName(nameA) === baseName(nameB);
+}
+
+/** Files from the graph that this card does not already list in that folder. */
+export function missingModels(existing, found) {
+  const rows = [];
+  for (const row of found || []) {
+    const name = String(row?.name || "").replace(/\\/g, "/").trim();
+    const folder = cleanFolder(row?.folder);
+    if (!folder || !looksLikeModelFile(name)) continue;
+    const candidate = { name, folder };
+    if ((existing || []).some((item) => sameModel(item, candidate))) continue;
+    const dup = rows.find((item) => sameModel(item, candidate));
+    if (!dup) {
+      rows.push({ name, folder, url: "", size: "", note: "" });
+      continue;
+    }
+    if (name.includes("/") && !dup.name.includes("/")) dup.name = name;
+  }
+  return rows;
+}
+
 /** One pack per custom_nodes module, probed by the first node type seen. */
 export function packsFromNodes(nodes) {
   const packs = [];

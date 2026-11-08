@@ -6,8 +6,12 @@ import test from "node:test";
 import {
   cardHasContent,
   folderChoices,
+  folderForWidget,
   folderLabel,
   groupModels,
+  inputConfig,
+  missingModels,
+  modelsFromNode,
   panelBox,
   matchFile,
   modelSource,
@@ -166,6 +170,90 @@ test("folder dropdown lists every folder and keeps a saved one", () => {
   const fresh = folderChoices(["diffusion_models"], "");
   assert.equal(fresh.selected, "checkpoints");
   assert.equal(fresh.options.filter((folder) => folder === "checkpoints").length, 1);
+});
+
+test("a workflow scan suggests loader files that the card does not already list", () => {
+  const checkpoint = {
+    input: {
+      required: {
+        ckpt_name: [["old.safetensors"], { tooltip: "checkpoint" }],
+      },
+    },
+  };
+  const lora = {
+    input: {
+      required: {
+        lora_name: ["COMBO", { remote: { route: "/internal/models/loras" } }],
+      },
+    },
+  };
+  const vision = {
+    input: {
+      required: {
+        clip_name: [["vision.safetensors"]],
+      },
+    },
+  };
+  assert.equal(inputConfig(lora, "lora_name").remote.route, "/internal/models/loras");
+  assert.equal(folderForWidget({
+    nodeType: "CustomLora",
+    widgetName: "lora_name",
+    spec: inputConfig(lora, "lora_name"),
+  }), "loras");
+  assert.equal(folderForWidget({
+    nodeType: "CLIPVisionLoader",
+    widgetName: "clip_name",
+    spec: inputConfig(vision, "clip_name"),
+  }), "clip_vision");
+  assert.equal(folderForWidget({
+    nodeType: "UpscaleModelLoader",
+    widgetName: "model_name",
+    spec: {},
+  }), "upscale_models");
+
+  const found = [
+    ...modelsFromNode({
+      type: "CheckpointLoaderSimple",
+      widgets: [
+        { name: "ckpt_name", value: "heroes\\portrait.safetensors" },
+        { name: "ckpt_name", value: "None" },
+      ],
+      def: checkpoint,
+    }),
+    ...modelsFromNode({
+      type: "LoraLoader",
+      widgets: [{ name: "lora_name", value: "detail.safetensors" }],
+      def: lora,
+    }),
+    ...modelsFromNode({
+      type: "CLIPVisionLoader",
+      widgets: [{ name: "clip_name", value: "vision.safetensors" }],
+      def: vision,
+    }),
+    ...modelsFromNode({
+      type: "Note",
+      widgets: [{ name: "text", value: "not a model" }],
+      def: {},
+    }),
+  ];
+  const missing = missingModels(
+    [{ name: "portrait.safetensors", folder: "checkpoints" }],
+    found,
+  );
+  assert.deepEqual(missing.map((row) => [row.folder, row.name, row.url]), [
+    ["loras", "detail.safetensors", ""],
+    ["clip_vision", "vision.safetensors", ""],
+  ]);
+  const again = missingModels(
+    [{ name: "sub/detail.safetensors", folder: "loras" }],
+    [{ name: "detail.safetensors", folder: "loras" }],
+  );
+  assert.equal(again.length, 0);
+  const otherFolder = missingModels(
+    [{ name: "detail.safetensors", folder: "checkpoints" }],
+    [{ name: "detail.safetensors", folder: "loras" }],
+  );
+  assert.equal(otherFolder.length, 1);
 });
 
 test("the card box uses the rest of the node below the title", () => {

@@ -75,6 +75,8 @@ The card is view-only until you click the pencil (or right-click the node and ch
 
 Model rows are grouped under `models/<folder>`. A dot marks each row: found, missing, or not checked (no folder, or this install has no such folder). **Check again** looks up ComfyUI's model list. Pack rows use the same installed / missing marks against the node classes this ComfyUI has loaded.
 
+**Scan workflow**, in the editor or on the node's right-click menu, reads the loaders in this graph. It lists checkpoint, LoRA, VAE, diffusion, text encoder, ControlNet, embedding, upscale, and similar files that are not already on the card. Tick the ones you want and add them. The file name and folder are filled in. The download URL stays empty when the graph only has a local file name.
+
 **Download** sends the row's URL, file name, and folder to this ComfyUI process. The file is written only inside a model directory ComfyUI already knows. Paths that would leave that directory are rejected. The button shows progress, then **Installed**, or the error and **Retry**.
 
 URLs can be:

@@ -18,6 +18,8 @@ import {
   panelBox,
   hostOf,
   matchFile,
+  missingModels,
+  modelsFromNode,
   modelSource,
   mountMarkdown,
   normalizeCard,
@@ -118,6 +120,10 @@ const CSS = `
 .dh-seg button + button{border-left:1px solid #6a403c;}
 .dh-seg button.on{background:#e25b45;color:#2a100d;font-weight:700;}
 .dh-preview{border:1px solid #6a403c;border-radius:6px;padding:8px;}
+.dh-suggest{display:flex;flex-direction:column;gap:4px;max-height:52vh;overflow:auto;}
+.dh-suggest-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0;}
+.dh-suggest-row input{width:auto;margin-top:2px;}
+.dh-suggest-name{color:#fff7f4;font:12px ui-monospace,monospace;overflow-wrap:anywhere;}
 .dh-preview summary{cursor:pointer;color:#f0c2b8;}
 .spacer{flex:1 1 auto;}
 `;
@@ -256,6 +262,127 @@ function moduleOf(node, defs) {
   const registered = globalThis.LiteGraph?.registered_node_types?.[type];
   const fromNode = registered?.nodeData?.python_module;
   return typeof fromNode === "string" ? fromNode : "";
+}
+
+function walkFrom(graph, visit) {
+  const seen = new Set();
+  const walk = (current) => {
+    if (!current || seen.has(current)) return;
+    seen.add(current);
+    for (const node of current.nodes || current._nodes || []) {
+      visit(node);
+      if (node.subgraph) walk(node.subgraph);
+    }
+  };
+  walk(graph);
+}
+
+async function modelsInGraph(state, existing) {
+  const defs = await nodeDefs(false);
+  const found = [];
+  walkFrom(state.node?.graph || app.graph, (node) => {
+    if (!node || node === state.node || isHelper(node)) return;
+    const type = node.type || node.comfyClass || "";
+    const widgets = (node.widgets || []).map((widget) => ({ name: widget?.name, value: widget?.value }));
+    found.push(...modelsFromNode({ type, widgets, def: defs?.[type] }));
+  });
+  return missingModels(existing, found);
+}
+
+function appendSuggested(state, rows) {
+  if (!rows?.length) return;
+  if (typeof state.addSuggested === "function") {
+    state.addSuggested(rows);
+    return;
+  }
+  const next = normalizeCard(state.card);
+  const room = Math.max(0, ROW_LIMIT - next.models.length);
+  next.models = next.models.concat(rows.slice(0, room));
+  state.card = next;
+  writeCard(state.node, next);
+  renderCard(state);
+  scheduleFill(state);
+}
+
+function openModelScan(state) {
+  if (!state) return;
+  const existing = typeof state.listedModels === "function" ? state.listedModels() : state.card.models;
+  const overlay = el("div", "dh-overlay");
+  const dialog = el("div", "dh-dialog");
+  const head = el("div", "dh-dhead");
+  head.append(el("span", "", "Models in this workflow"), el("span", "spacer"));
+  const body = el("div", "dh-dbody");
+  body.append(el("p", "dh-hint", "Looking through this graph…"));
+  const foot = el("div", "dh-dfoot");
+  const error = el("span", "dh-error");
+  const cancel = el("button", "dh-btn", "Cancel");
+  cancel.type = "button";
+  const add = el("button", "dh-btn primary", "Add selected");
+  add.type = "button";
+  add.disabled = true;
+  foot.append(error, el("span", "spacer"), cancel, add);
+  dialog.append(head, body, foot);
+  overlay.append(dialog);
+  stopDrag(overlay);
+  const abort = new AbortController();
+  const close = () => {
+    abort.abort();
+    overlay.remove();
+  };
+  cancel.addEventListener("click", close);
+  overlay.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+    if (event.target === overlay) close();
+  }, { signal: abort.signal });
+  overlay.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Escape") close();
+  }, { signal: abort.signal });
+  document.body.append(overlay);
+
+  modelsInGraph(state, existing).then((rows) => {
+    body.textContent = "";
+    if (!rows.length) {
+      body.append(el("p", "dh-hint", "No extra model files. Everything this graph selects is already on the card, or the loaders do not name a file."));
+      return;
+    }
+    const checks = [];
+    const allLine = el("label", "dh-checkline");
+    const all = document.createElement("input");
+    all.type = "checkbox";
+    all.checked = true;
+    allLine.append(all, el("span", "", "Select all"));
+    const list = el("div", "dh-suggest");
+    body.append(el("p", "dh-hint", "These files are selected in this graph and are not on the card yet. URLs stay empty until you add one."), allLine, list);
+    for (const row of rows) {
+      const line = el("label", "dh-suggest-row");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      const text = el("span");
+      text.append(el("span", "dh-suggest-name", row.name));
+      text.append(document.createElement("br"));
+      text.append(el("span", "dh-meta", folderLabel(row.folder)));
+      line.append(box, text);
+      list.append(line);
+      checks.push({ box, row });
+      box.addEventListener("change", () => {
+        all.checked = checks.every((item) => item.box.checked);
+      });
+    }
+    all.addEventListener("change", () => {
+      for (const item of checks) item.box.checked = all.checked;
+    });
+    add.disabled = false;
+    add.addEventListener("click", () => {
+      const chosen = checks.filter((item) => item.box.checked).map((item) => item.row);
+      close();
+      appendSuggested(state, chosen);
+    });
+  }).catch(() => {
+    body.textContent = "";
+    body.append(el("p", "dh-error", "Could not read this graph."));
+  });
 }
 
 function externalLink(url, className, text) {
@@ -717,6 +844,7 @@ function textInput(value, placeholder) {
 
 function closeEditor() {
   if (!openEditor) return;
+  openEditor.release?.();
   openEditor.abort.abort();
   openEditor.root.remove();
   openEditor = null;
@@ -839,7 +967,15 @@ async function openCardEditor(state, draftCard) {
   const addModel = el("button", "dh-btn", "Add model");
   addModel.type = "button";
   addModel.addEventListener("click", () => models.add({ folder: "checkpoints" }));
-  form.append(field("Models", models.box, "Each row is a file, the models folder it belongs in, and a URL. Download fetches that URL into the folder. hf://, Hugging Face, Civitai, and other http(s) links work."), addModel);
+  const scanModels = el("button", "dh-btn", "Scan workflow");
+  scanModels.type = "button";
+  scanModels.title = "Suggest model files selected in this graph that are not on the card yet";
+  scanModels.addEventListener("click", () => openModelScan(state));
+  const modelTools = el("div");
+  modelTools.style.display = "flex";
+  modelTools.style.gap = "6px";
+  modelTools.append(addModel, scanModels);
+  form.append(field("Models", models.box, "Each row is a file, the models folder it belongs in, and a URL. Download fetches that URL into the folder. hf://, Hugging Face, Civitai, and other http(s) links work."), modelTools);
 
   const packs = editorTable("packs", ["Pack", "Link", "Probe node"], draft.packs, (row) => [
     textInput(row.name, "ComfyUI-Example"),
@@ -997,7 +1133,26 @@ async function openCardEditor(state, draftCard) {
     if (event.target === overlay) cancelEdit();
   }, { signal: abort.signal });
   document.body.append(overlay);
-  openEditor = { root: overlay, abort, nodeId: state.node.id };
+  const readListed = () => models.entries.map(({ inputs }) => ({
+    name: inputs[0].value,
+    folder: inputs[1].value,
+    url: inputs[2].value,
+    size: inputs[3].value,
+    note: inputs[4].value,
+  }));
+  state.listedModels = readListed;
+  state.addSuggested = (rows) => {
+    for (const row of rows) models.add(row);
+  };
+  openEditor = {
+    root: overlay,
+    abort,
+    nodeId: state.node.id,
+    release() {
+      state.listedModels = null;
+      state.addSuggested = null;
+    },
+  };
   title.focus();
 }
 
@@ -1133,10 +1288,16 @@ app.registerExtension({
   },
   getNodeMenuItems(node) {
     if (!isHelper(node)) return;
-    return [{
-      content: "Edit Workflow Helper",
-      callback: () => node.workflowHelper?.edit(),
-    }];
+    return [
+      {
+        content: "Edit Workflow Helper",
+        callback: () => node.workflowHelper?.edit(),
+      },
+      {
+        content: "Scan workflow for models",
+        callback: () => openModelScan(node.workflowHelper),
+      },
+    ];
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name !== NODE_TYPE) return;
@@ -1156,10 +1317,16 @@ app.registerExtension({
     });
     after(nodeType.prototype, "getExtraMenuOptions", function (_canvas, options) {
       if (!Array.isArray(options)) return;
-      options.unshift({
-        content: "Edit Workflow Helper",
-        callback: () => this.workflowHelper?.edit(),
-      });
+      options.unshift(
+        {
+          content: "Edit Workflow Helper",
+          callback: () => this.workflowHelper?.edit(),
+        },
+        {
+          content: "Scan workflow for models",
+          callback: () => openModelScan(this.workflowHelper),
+        },
+      );
     });
     after(nodeType.prototype, "refreshComboInNode", function () {
       this.workflowHelper?.recheck(true);
