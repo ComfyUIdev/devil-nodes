@@ -16,7 +16,7 @@ Documentation = "https://github.com/ComfyUIdev/devil-nodes"
 "Bug Tracker" = "https://github.com/ComfyUIdev/devil-nodes/issues"
 
 [tool.comfy]
-PublisherId = "ComfyUIdev"
+PublisherId = "comfyuidev"
 DisplayName = "Devil Nodes"
 Icon = "https://raw.githubusercontent.com/ComfyUIdev/devil-nodes/main/icon.png"
 Banner = "https://raw.githubusercontent.com/ComfyUIdev/devil-nodes/main/banner.png"
