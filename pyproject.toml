@@ -1,0 +1,22 @@
+[project]
+name = "devil-nodes"
+version = "1.0.0"
+description = "Canvas bookmarks for ComfyUI. Favorite jumps to a saved anchor with pan, zoom, offsets, and optional animation and blur."
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+authors = [{ name = "ComfyUIdev" }]
+dependencies = []
+classifiers = [
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/ComfyUIdev/devil-nodes"
+Documentation = "https://github.com/ComfyUIdev/devil-nodes"
+"Bug Tracker" = "https://github.com/ComfyUIdev/devil-nodes/issues"
+
+[tool.comfy]
+PublisherId = "ComfyUIdev"
+DisplayName = "Devil Nodes"
+Icon = "https://raw.githubusercontent.com/ComfyUIdev/devil-nodes/main/icon.png"
+Banner = "https://raw.githubusercontent.com/ComfyUIdev/devil-nodes/main/banner.png"

@@ -1,0 +1,18 @@
+# Kept in git for local review, omitted from the Registry archive.
+artifacts/
+uploads/
+tests/
+docs/design/
+
+# Design sources
+*.psd
+*.ai
+*.sketch
+*.fig
+*.xcf
+
+# Nested packs and caches
+*.zip
+__pycache__/
+*.py[cod]
+.DS_Store
