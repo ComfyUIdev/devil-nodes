@@ -16,6 +16,7 @@ import {
   folderLabel,
   groupModels,
   panelBox,
+  downloadBody,
   hostOf,
   matchFile,
   missingModels,
@@ -24,15 +25,19 @@ import {
   mountMarkdown,
   normalizeCard,
   packsFromNodes,
+  rememberCivitaiToken,
   safeLink,
   serializeCard,
   showsTile,
+  storedCivitaiToken,
   tileIsDownloadList,
 } from "./workflow_helper_card.js";
 
 const NODE_TYPE = "WorkflowHelper";
 const STYLE_ID = "devil-workflow-helper-style";
 const FOLDER_CACHE_MS = 20000;
+let civitaiTokenMemory = "";
+let civitaiTokenReady = false;
 
 const folderCache = new Map();
 let folderNamesPromise = null;
@@ -43,7 +48,7 @@ const CSS = `
 .dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;pointer-events:auto;}
 .dh-root *{box-sizing:border-box;}
 .dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;pointer-events:auto;}
-.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn,.dh-tile-open{pointer-events:auto;}
+.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn,.dh-tile-open,.dh-token{pointer-events:auto;}
 .dh-tone-teal{color:#3dccc7;}
 .dh-tone-green{color:#7dcea0;}
 .dh-tone-amber{color:#f0b429;}
@@ -107,6 +112,9 @@ const CSS = `
 .dh-dl:disabled{opacity:.7;cursor:default;}
 .dh-pill{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:11px;background:rgba(125,206,160,.16);color:#b7ebc8;font-size:10.5px;white-space:nowrap;}
 .dh-pill.is-missing{background:rgba(226,91,69,.16);color:#ffb1a3;}
+.dh-token-row{display:flex;flex-direction:column;gap:4px;margin-top:8px;max-width:320px;}
+.dh-token{width:100%;height:26px;padding:0 8px;border:1px solid #6a403c;border-radius:5px;background:#2a1c1a;color:#fff7f4;font:12px ui-monospace,monospace;}
+.dh-token::placeholder{color:#8d736c;}
 .dh-bar{height:5px;margin-top:4px;overflow:hidden;border-radius:3px;background:#3a2826;}
 .dh-bar > span{display:block;height:100%;width:0;background:#e25b45;}
 .dh-chips{display:flex;flex-wrap:wrap;gap:6px;}
@@ -644,7 +652,7 @@ async function startDownload(state, row, view) {
     response = await api.fetchApi("/devil-nodes/helper/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: row.url, filename: row.name, folder: row.folder }),
+      body: JSON.stringify(downloadBody(row, currentCivitaiToken())),
     });
   } catch {
     view.showError("Could not reach the download route.");
@@ -918,6 +926,7 @@ function appendCardSections(state, parent) {
     section.append(chips);
     parent.append(section);
   }
+  parent.append(civitaiTokenSection());
   state.recheck(false);
 }
 
@@ -1024,6 +1033,7 @@ function renderCard(state) {
 
   if (!cardHasContent(card)) {
     scroll.append(el("div", "dh-empty", "Click the pencil to add a title, a how-to, the models to download, the packs this workflow needs, and your links."));
+    scroll.append(civitaiTokenSection());
     scheduleFill(state);
     return;
   }
@@ -1087,6 +1097,72 @@ function textInput(value, placeholder) {
   input.value = value || "";
   if (placeholder) input.placeholder = placeholder;
   return input;
+}
+
+function browserStorage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function currentCivitaiToken() {
+  if (!civitaiTokenReady) {
+    civitaiTokenMemory = storedCivitaiToken(browserStorage());
+    civitaiTokenReady = true;
+  }
+  return civitaiTokenMemory;
+}
+
+function persistCivitaiToken(value) {
+  civitaiTokenReady = true;
+  civitaiTokenMemory = rememberCivitaiToken(browserStorage(), value);
+  for (const other of document.querySelectorAll("input.dh-token")) {
+    if (other === document.activeElement) continue;
+    if (other.value !== civitaiTokenMemory) other.value = civitaiTokenMemory;
+  }
+  return civitaiTokenMemory;
+}
+
+function civitaiTokenControl() {
+  const input = el("input", "dh-token");
+  input.type = "password";
+  input.autocomplete = "off";
+  input.autocapitalize = "off";
+  input.spellcheck = false;
+  input.placeholder = "Civitai API token";
+  input.setAttribute("autocomplete", "off");
+  input.value = currentCivitaiToken();
+  input.addEventListener("input", () => persistCivitaiToken(input.value));
+  input.addEventListener("change", () => {
+    input.value = persistCivitaiToken(input.value);
+  });
+  stopDrag(input);
+  return input;
+}
+
+function civitaiTokenSection() {
+  const section = el("div", "dh-section");
+  section.append(sectionTitle("Civitai token"));
+  const row = el("div", "dh-token-row");
+  row.append(civitaiTokenControl());
+  row.append(el("div", "dh-meta", "This browser only. It is not saved in the workflow."));
+  section.append(row);
+  return section;
+}
+
+function dropTokenFromSerialized(info) {
+  const token = currentCivitaiToken();
+  if (!info || typeof info !== "object" || !token) return;
+  if (Array.isArray(info.widgets_values)) {
+    info.widgets_values = info.widgets_values.filter((value) => value !== token);
+  }
+  const props = info.properties;
+  if (!props || typeof props !== "object") return;
+  for (const key of Object.keys(props)) {
+    if (props[key] === token) delete props[key];
+  }
 }
 
 function closeEditor() {
@@ -1249,6 +1325,11 @@ async function openCardEditor(state, draftCard) {
   modelTools.style.gap = "6px";
   modelTools.append(addModel, scanModels);
   form.append(field("Models", models.box, "Each row is a file, the models folder it belongs in, and a URL. Download fetches that URL into the folder. hf://, Hugging Face, Civitai, and other http(s) links work."), modelTools);
+  form.append(field(
+    "Civitai token",
+    civitaiTokenControl(),
+    "Masked, and stored in this browser only. Save does not write it into the workflow. It is sent only to Civitai.",
+  ));
 
   const packs = editorTable("packs", ["Pack", "Link", "Probe node"], draft.packs, (row) => [
     textInput(row.name, "ComfyUI-Example"),
@@ -1436,6 +1517,7 @@ function preferredHeight(card) {
   let height = 110;
   if (String(card.body || "").trim()) height += 140;
   height += (card.models?.length || 0) * 42;
+  height += 72;
   height += (card.packs?.length || 0) * 34;
   if (card.links?.length) height += 52;
   return Math.max(200, Math.min(680, height));
@@ -1590,8 +1672,9 @@ app.registerExtension({
     after(nodeType.prototype, "onSerialize", function (info) {
       if (!info || typeof info !== "object") return;
       const helper = this.workflowHelper;
-      const text = helper?.sourceText || serializeCard(helper?.card || {});
+      const text = serializeCard(helper?.card || helper?.sourceText || {});
       info.properties = { ...(info.properties || {}), workflowHelper: text };
+      dropTokenFromSerialized(info);
     });
     after(nodeType.prototype, "getExtraMenuOptions", function (_canvas, options) {
       if (!Array.isArray(options)) return;
