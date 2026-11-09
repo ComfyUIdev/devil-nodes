@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Model downloads use the Python standard library. Hugging Face tokens still come from the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `HUGGINGFACE_HUB_TOKEN`) and, when `huggingface_hub` is installed, from `hf auth login`.
+
 ## 1.1.0 - 2026-11-09
 
 - Add Workflow Helper: a card saved in the workflow with a title, a Markdown how-to, model rows, custom node packs, and author links. Each model and pack row is marked installed or missing on the ComfyUI that opens the workflow.

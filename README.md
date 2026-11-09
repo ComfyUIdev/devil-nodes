@@ -100,7 +100,7 @@ The card JSON is stored on the node, so it comes back with the workflow, includi
 
 - ComfyUI
 - Python 3.8 or newer
-- No extra Python packages. Workflow Helper uses `aiohttp`, which ComfyUI already provides. Hugging Face downloads use `huggingface_hub` when it is installed. If it is not, and `hf` or `huggingface-cli` is on `PATH`, that command is used. Otherwise the file is fetched over HTTPS. `b2:` links need `rclone` on `PATH`.
+- No extra Python packages. Model file downloads use the Python standard library. Hugging Face downloads use `huggingface_hub` when it is installed. If it is not, and `hf` or `huggingface-cli` is on `PATH`, that command is used. Otherwise the file is fetched over HTTPS. `b2:` links need `rclone` on `PATH`.
 
 ## Nodes in this pack
 

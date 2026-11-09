@@ -9,11 +9,12 @@ Supported sources:
 - ``hf://org/repo/path`` and a pasted ``hf download hf://...`` command
 - ``b2:`` links, fetched with rclone when it is installed
 
-A Hugging Face token is read only from this process environment. When
-``huggingface_hub`` is installed it may also use the login saved by
-``hf auth login``. That token is sent only to Hugging Face hosts. A Civitai
-token in this process environment is sent only to Civitai hosts. Tokens are
-never written into status messages.
+A Hugging Face token comes from this process environment
+(``HF_TOKEN``, ``HUGGING_FACE_HUB_TOKEN``, or ``HUGGINGFACE_HUB_TOKEN``).
+When none of those is usable and ``huggingface_hub`` is installed, the
+login saved by ``hf auth login`` is used. That token is sent only to
+Hugging Face hosts. A Civitai token in this process environment is sent
+only to Civitai hosts. Tokens are never written into status messages.
 """
 
 from __future__ import annotations
@@ -25,7 +26,9 @@ import os
 import re
 import shutil
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 HF_TOKEN_NAMES = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN")
 CIVITAI_TOKEN_NAMES = ("CIVITAI_API_TOKEN", "CIVITAI_TOKEN")
@@ -33,6 +36,8 @@ HF_PAGE_HOSTS = {"huggingface.co", "www.huggingface.co", "hf.co"}
 CIVITAI_HOSTS = {"civitai.com", "www.civitai.com", "civitai.red", "www.civitai.red"}
 USER_AGENT = "devil-nodes/workflow-helper"
 PARTIAL_SUFFIX = ".devilpart"
+# One socket operation, connect or read. The download itself is not capped.
+HTTP_TIMEOUT_SECONDS = 300
 
 _TOKEN_PLACEHOLDERS = {
     "hf_token",
@@ -112,29 +117,95 @@ def _rank_token(token):
     return 1
 
 
-def _env_token(names):
-    """Best usable token from this process environment. Nothing else is read."""
+def _accept_hub_token(raw):
+    """A token ``huggingface_hub`` already resolved, or empty.
+
+    Saved logins can be opaque session strings, so this allows a few more
+    characters than :func:`token_usable`. Placeholders are still rejected.
+    """
+    token = clean_token(raw or "")
+    if token_usable(token):
+        return token
+    if not token or len(token) < 20 or any(ch.isspace() for ch in token):
+        return ""
+    if token.lower() in _TOKEN_PLACEHOLDERS or token.startswith("${") or token.startswith("<"):
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_\-.=+/]+", token) is None:
+        return ""
+    return token
+
+
+def _process_env_token(names):
+    """Best usable token among ``names`` in this process environment.
+
+    Only those names are considered. Token files are not opened here.
+    An earlier name wins when two values are equally good, and a value
+    that starts with ``hf_`` beats one that does not.
+    """
+    order = {name: index for index, name in enumerate(names)}
     best = ""
     best_rank = 0
-    for name in names:
-        rank = _rank_token(clean_token(os.environ.get(name) or ""))
-        if rank > best_rank:
-            best = clean_token(os.environ.get(name) or "")
+    best_index = len(names)
+    for name, value in list(os.environ.items()):
+        index = order.get(name)
+        if index is None:
+            continue
+        token = clean_token(value or "")
+        rank = _rank_token(token)
+        if not rank:
+            continue
+        if rank > best_rank or (rank == best_rank and index < best_index):
+            best = token
             best_rank = rank
-    return best if best_rank else ""
+            best_index = index
+    return best
+
+
+def _saved_hf_login():
+    """Token stored by ``hf auth login``, when ``huggingface_hub`` is installed.
+
+    A failure here returns no token. Public downloads still run, and
+    ``hf_hub_download`` reports its own error if a gated file needs auth.
+    """
+    try:
+        import huggingface_hub
+    except ImportError:
+        return ""
+    getter = getattr(huggingface_hub, "get_token", None)
+    if getter is None:
+        folder = getattr(huggingface_hub, "HfFolder", None)
+        getter = getattr(folder, "get_token", None) if folder is not None else None
+    if not callable(getter):
+        return ""
+    try:
+        raw = getter()
+    except Exception:  # noqa: BLE001 - a broken login lookup must not block a public download
+        return ""
+    if not isinstance(raw, str):
+        return ""
+    return _accept_hub_token(raw)
 
 
 def lookup_hf_token():
-    """Hub token from ``HF_TOKEN`` or the ``HUGGING*_HUB_TOKEN`` variables.
+    """Token for Hugging Face hosts.
 
-    An empty result means the caller should let ``huggingface_hub`` or the
-    ``hf`` CLI use the login those tools already stored.
+    Named variables in this process win, including the cleaning of a copied
+    ``Bearer`` prefix or ``KEY=`` line. ``huggingface_hub`` does not read
+    ``HUGGINGFACE_HUB_TOKEN`` and only strips whitespace, so that library is
+    not the first source. When no named variable is usable, ``get_token``
+    supplies the login saved by ``hf auth login``. An empty string means
+    neither source had a usable token. The ``hf`` CLI can still see variables
+    it inherits, and a public HTTPS download still runs.
     """
-    return _env_token(HF_TOKEN_NAMES)
+    found = _process_env_token(HF_TOKEN_NAMES)
+    if found:
+        return found
+    return _saved_hf_login()
 
 
 def lookup_civitai_token():
-    return _env_token(CIVITAI_TOKEN_NAMES)
+    """Token for Civitai hosts, from this process environment only."""
+    return _process_env_token(CIVITAI_TOKEN_NAMES)
 
 
 def request_headers(url, hf_token="", civitai_token=""):
@@ -401,58 +472,100 @@ def _secrets_for(hf_token, civitai_token, url):
     return secrets
 
 
-async def download_http(url, dest, job, hf_token="", civitai_token=""):
-    import aiohttp
+class _Unredirected(urllib.request.HTTPErrorProcessor):
+    """Return the response unchanged, including redirects and HTTP errors.
 
+    The download loop follows redirects itself. That keeps a token on the
+    host it belongs to, and it refuses a redirect whose scheme is not http
+    or https before another request is opened.
+    """
+
+    def http_response(self, request, response):
+        return response
+
+    https_response = http_response
+
+
+def _header(response, name):
+    headers = getattr(response, "headers", None)
+    if headers is not None and hasattr(headers, "get"):
+        return headers.get(name)
+    getter = getattr(response, "getheader", None)
+    if getter is not None:
+        return getter(name)
+    return None
+
+
+async def download_http(url, dest, job, hf_token="", civitai_token=""):
+    """Fetch one http(s) URL. Proxy variables are honored by ``urllib``."""
+    try:
+        await asyncio.to_thread(_download_http_blocking, url, dest, job, hf_token, civitai_token)
+    except asyncio.CancelledError:
+        if job.get("status") == "downloading":
+            _fail(job, "The download was cancelled.", job.get("secrets") or [])
+        raise
+
+
+def _download_http_blocking(url, dest, job, hf_token="", civitai_token=""):
     secrets = _secrets_for(hf_token, civitai_token, url)
     job["secrets"] = secrets
-    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=300)
     partial = dest + PARTIAL_SUFFIX
     current = url
     try:
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-            for _hop in range(8):
-                headers = request_headers(current, hf_token, civitai_token)
-                async with session.get(current, headers=headers, allow_redirects=False) as resp:
-                    if resp.status in {301, 302, 303, 307, 308}:
-                        location = resp.headers.get("Location")
-                        if not location:
-                            raise DownloadError("The host redirected without a destination.")
-                        nxt = urllib.parse.urljoin(str(resp.url), location)
-                        scheme = urllib.parse.urlparse(nxt).scheme
-                        if scheme not in {"http", "https"}:
-                            raise DownloadError("The host redirected away from http.")
-                        current = nxt
-                        continue
-                    if resp.status == 401:
-                        raise DownloadError("The host refused the download (401). A token may be required.")
-                    if resp.status == 403:
-                        raise DownloadError("The host refused the download (403).")
-                    if resp.status == 404:
-                        raise DownloadError("The file was not found (404).")
-                    if resp.status >= 400 or resp.status < 200:
-                        raise DownloadError(f"The host returned HTTP {resp.status}.")
-                    ctype = (resp.headers.get("Content-Type") or "").lower()
-                    if "text/html" in ctype:
-                        raise DownloadError("The link returned a web page, not a model file.")
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    if "application/json" in ctype and (total == 0 or total < 2_000_000):
-                        peek = await resp.content.read(64)
-                        if peek.lstrip().startswith((b"{", b"[")):
-                            raise DownloadError("The host returned an error page instead of the file.")
-                        await _write_stream(partial, resp.content, job, total, prefix=peek)
-                    else:
-                        await _write_stream(partial, resp.content, job, total)
-                    break
-            else:
-                raise DownloadError("The host redirected too many times.")
+        for _hop in range(8):
+            if urllib.parse.urlparse(current).scheme not in {"http", "https"}:
+                raise DownloadError("The host redirected away from http.")
+            headers = request_headers(current, hf_token, civitai_token)
+            request = urllib.request.Request(current, headers=headers, method="GET")
+            opener = urllib.request.build_opener(_Unredirected)
+            try:
+                response = opener.open(request, timeout=HTTP_TIMEOUT_SECONDS)
+            except urllib.error.URLError as exc:
+                raise DownloadError(f"Download failed: {exc.reason}") from exc
+            try:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                if status in {301, 302, 303, 307, 308}:
+                    location = _header(response, "Location")
+                    if not location:
+                        raise DownloadError("The host redirected without a destination.")
+                    nxt = urllib.parse.urljoin(getattr(response, "url", None) or current, location)
+                    if urllib.parse.urlparse(nxt).scheme not in {"http", "https"}:
+                        raise DownloadError("The host redirected away from http.")
+                    current = nxt
+                    continue
+                if status == 401:
+                    raise DownloadError("The host refused the download (401). A token may be required.")
+                if status == 403:
+                    raise DownloadError("The host refused the download (403).")
+                if status == 404:
+                    raise DownloadError("The file was not found (404).")
+                if status >= 400 or status < 200:
+                    raise DownloadError(f"The host returned HTTP {status}.")
+                ctype = (_header(response, "Content-Type") or "").lower()
+                if "text/html" in ctype:
+                    raise DownloadError("The link returned a web page, not a model file.")
+                try:
+                    total = int(_header(response, "Content-Length") or 0)
+                except (TypeError, ValueError):
+                    total = 0
+                if "application/json" in ctype and (total == 0 or total < 2_000_000):
+                    peek = response.read(64)
+                    if peek.lstrip().startswith((b"{", b"[")):
+                        raise DownloadError("The host returned an error page instead of the file.")
+                    _write_body(partial, response, job, total, prefix=peek)
+                else:
+                    _write_body(partial, response, job, total)
+                break
+            finally:
+                response.close()
+        else:
+            raise DownloadError("The host redirected too many times.")
         os.replace(partial, dest)
         _finish(job, dest)
     except DownloadError as exc:
         _fail(job, str(exc), secrets)
-    except asyncio.CancelledError:
-        _fail(job, "The download was cancelled.", secrets)
-        raise
     except Exception as exc:  # noqa: BLE001 - the UI needs the failure, not a traceback
         _fail(job, f"Download failed: {exc}", secrets)
     finally:
@@ -463,27 +576,25 @@ async def download_http(url, dest, job, hf_token="", civitai_token=""):
                 pass
 
 
-async def _write_stream(partial, stream, job, total, prefix=b""):
+def _write_body(partial, response, job, total, prefix=b""):
     os.makedirs(os.path.dirname(partial), exist_ok=True)
     written = 0
-    started = time.monotonic()
-    last_tick = started
+    last_tick = time.monotonic()
     last_bytes = 0
     with open(partial, "wb") as handle:
         if prefix:
             handle.write(prefix)
             written += len(prefix)
-        async for chunk in stream.iter_chunked(256 * 1024):
+        while True:
+            chunk = response.read(256 * 1024)
             if not chunk:
-                continue
+                break
             handle.write(chunk)
             written += len(chunk)
             now = time.monotonic()
             if now - last_tick >= 0.4:
-                speed = ""
                 elapsed = now - last_tick
-                if elapsed > 0:
-                    speed = _format_rate((written - last_bytes) / elapsed)
+                speed = _format_rate((written - last_bytes) / elapsed) if elapsed > 0 else ""
                 percent = int(written * 100 / total) if total else 0
                 _note(job, percent=percent if total else None, speed=speed, message="" if total else f"Downloaded {_format_bytes(written)}")
                 last_tick = now
