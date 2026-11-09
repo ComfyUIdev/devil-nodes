@@ -41,6 +41,13 @@ const CSS = `
 .dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;}
 .dh-root *{box-sizing:border-box;}
 .dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;}
+/* Nodes 2.0 sizes the widget grid to its text. Force this node's grid to the
+   body under the title, and keep the card in that cell instead of a fixed
+   canvas overlay. Classic nodes are not .lg-node, so this stays off there. */
+.lg-node:has(.dh-root) [data-testid="node-widgets"]{flex:1 1 auto !important;width:100% !important;min-height:0 !important;align-self:stretch !important;grid-template-columns:minmax(0,1fr) !important;grid-template-rows:minmax(0,1fr) !important;}
+.lg-node:has(.dh-root) [data-widget-name="helper_panel"],
+.lg-node:has(.dh-root) [data-widget-name="helper_panel"] > *{width:100% !important;height:100% !important;min-width:0 !important;min-height:0 !important;align-self:stretch !important;}
+.lg-node .dh-root{position:relative !important;transform:none !important;left:auto !important;top:auto !important;inset:auto !important;width:100% !important;height:100% !important;min-width:100% !important;min-height:100% !important;max-width:none !important;max-height:none !important;flex:1 1 auto !important;align-self:stretch !important;}
 .dh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:0 0 10px;}
 .dh-head{position:relative;padding:12px 36px 10px 14px;border-left:4px solid #e25b45;}
 .dh-title{margin:0;color:#fff7f4;font-size:22px;font-weight:700;line-height:1.15;overflow-wrap:anywhere;}
@@ -606,94 +613,100 @@ function sectionTitle(text) {
   return heading;
 }
 
-function vueNodes() {
-  if (globalThis.LiteGraph?.vueNodesMode === true) return true;
-  try {
-    return app.ui?.settings?.getSettingValue?.("Comfy.VueNodes.Enabled") === true;
-  } catch {
-    return false;
-  }
-}
-
 function cssId(value) {
   const text = String(value ?? "");
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(text);
   return text.replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
-function renderedBody(node) {
-  const id = cssId(node?.id);
-  if (!id || node.id == null || node.id === -1) return null;
-  const host = document.querySelector(`[data-node-id="${id}"]`);
-  if (!host) return null;
-  const hostRect = host.getBoundingClientRect();
-  if (hostRect.width < 40 || hostRect.height < 40) return null;
-  const header = host.querySelector("header");
-  const headerH = header ? header.getBoundingClientRect().height : 0;
-  return {
-    width: Math.max(200, hostRect.width - 8),
-    height: Math.max(48, hostRect.height - headerH),
-  };
+function nodeChrome(root) {
+  return root?.closest?.("[data-node-id]") || root?.closest?.(".lg-node") || null;
 }
 
 function boxFor(state) {
   const node = state.node;
-  const contentMin = preferredHeight(state.card);
   const top = Number.isFinite(state.dom?.y) && state.dom.y > 4 ? state.dom.y : 40;
-  const fromSize = panelBox({
+  return panelBox({
     nodeWidth: node.size?.[0],
     nodeHeight: node.size?.[1],
-    top: vueNodes() ? 40 : top,
-    contentMin,
+    top,
+    contentMin: preferredHeight(state.card),
   });
-  if (!vueNodes()) return fromSize;
-  const rendered = renderedBody(node);
-  if (!rendered) return fromSize;
-  // Prefer the on-screen node body. If that element is still only as tall as
-  // the text and node.size is clearly taller, catch up to node.size once.
-  const height = rendered.height + 24 < fromSize.height
-    ? Math.max(contentMin, fromSize.height)
-    : Math.max(contentMin, rendered.height);
-  return {
-    width: Math.max(fromSize.width, rendered.width),
-    height,
-  };
+}
+
+/** Nodes 2.0 draws the node as an element. Stretch its widget grid to that box. */
+function fillVueNode(root) {
+  const chrome = nodeChrome(root);
+  if (!chrome) return false;
+  const style = getComputedStyle(chrome);
+  let width = parseFloat(style.getPropertyValue("--node-width"));
+  let height = parseFloat(style.getPropertyValue("--node-height"));
+  if (!(width > 40) || !(height > 40)) {
+    const rect = chrome.getBoundingClientRect();
+    if (!(width > 40)) width = rect.width;
+    if (!(height > 40)) height = rect.height;
+  }
+  // --node-height already includes the title bar. Subtract a fixed header
+  // instead of measuring the body, which would grow with the card.
+  const boxW = Math.max(200, Math.round(width - 12));
+  const boxH = Math.max(72, Math.round(height - 44));
+  const grid = chrome.querySelector("[data-testid='node-widgets']");
+  if (grid) {
+    const names = [];
+    grid.querySelectorAll("[data-widget-name]").forEach((row) => {
+      const name = row.getAttribute("data-widget-name");
+      if (name && !names.includes(name)) names.push(name);
+    });
+    const rows = (names.length ? names : ["helper_panel"]).map((name) =>
+      name === "helper_panel" ? "minmax(0, 1fr)" : "min-content",
+    );
+    grid.style.setProperty("display", "grid", "important");
+    grid.style.setProperty("width", "100%", "important");
+    grid.style.setProperty("flex", "1 1 auto", "important");
+    grid.style.setProperty("min-height", "0", "important");
+    grid.style.setProperty("align-self", "stretch", "important");
+    grid.style.setProperty("grid-template-columns", "minmax(0, 1fr)", "important");
+    grid.style.setProperty("grid-template-rows", rows.join(" "), "important");
+  }
+  root.style.setProperty("position", "relative", "important");
+  root.style.setProperty("transform", "none", "important");
+  root.style.setProperty("left", "auto", "important");
+  root.style.setProperty("top", "auto", "important");
+  root.style.setProperty("width", "100%", "important");
+  root.style.setProperty("height", `${boxH}px`, "important");
+  root.style.setProperty("min-width", `${boxW}px`, "important");
+  root.style.setProperty("min-height", `${boxH}px`, "important");
+  root.style.setProperty("max-width", "none", "important");
+  root.style.setProperty("flex", "1 1 auto", "important");
+  root.style.setProperty("align-self", "stretch", "important");
+  return true;
 }
 
 function applyFill(state) {
-  const box = boxFor(state);
   const root = state.root;
-  const previous = state.lastFill;
-  if (previous && Math.abs(previous.width - box.width) < 4 && Math.abs(previous.height - box.height) < 4) return;
-  state.lastFill = box;
+  if (!root) return;
+  if (fillVueNode(root)) return;
   root.style.display = "flex";
   root.style.flexDirection = "column";
   root.style.alignSelf = "stretch";
-  root.style.justifySelf = "stretch";
-  root.style.flex = "1 1 auto";
   root.style.boxSizing = "border-box";
   root.style.width = "100%";
   root.style.height = "100%";
-  if (vueNodes()) {
-    root.style.minWidth = `${box.width}px`;
-    root.style.minHeight = `${box.height}px`;
-    root.style.height = `${box.height}px`;
-  } else {
-    root.style.minWidth = "100%";
-    root.style.minHeight = "100%";
-  }
+  root.style.minWidth = "100%";
+  root.style.minHeight = "100%";
 }
 
 function watchHost(state) {
+  const chrome = nodeChrome(state.root);
   const id = cssId(state.node?.id);
-  const host = id && document.querySelector(`[data-node-id="${id}"]`);
+  const host = chrome || (id && document.querySelector(`[data-node-id="${id}"]`));
   if (!host || state.observed === host) return;
   state.boxObserver?.disconnect();
-  state.boxObserver = new ResizeObserver(() => {
-    state.lastFill = null;
-    applyFill(state);
-  });
+  state.slotObserver?.disconnect();
+  state.boxObserver = new ResizeObserver(() => applyFill(state));
   state.boxObserver.observe(host);
+  state.slotObserver = new MutationObserver(() => applyFill(state));
+  state.slotObserver.observe(host, { childList: true, subtree: true });
   state.observed = host;
 }
 
@@ -701,7 +714,6 @@ function scheduleFill(state) {
   applyFill(state);
   requestAnimationFrame(() => {
     watchHost(state);
-    state.lastFill = null;
     applyFill(state);
   });
 }
@@ -1206,6 +1218,8 @@ function attach(node) {
       state.timers.clear();
       state.boxObserver?.disconnect();
       state.boxObserver = null;
+      state.slotObserver?.disconnect();
+      state.slotObserver = null;
       state.observed = null;
       if (openEditor?.nodeId === node.id) closeEditor();
       node.workflowHelper = null;
@@ -1227,7 +1241,6 @@ function attach(node) {
         return boxFor(state).height;
       },
       afterResize() {
-        state.lastFill = null;
         applyFill(state);
       },
     });

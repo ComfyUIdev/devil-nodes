@@ -6,7 +6,7 @@
 - Model Download buttons fetch the row URL (direct http(s), Hugging Face, Civitai, `hf://`, and `b2:` via rclone) into that row's models folder, with progress and errors on the card. Files are written only inside model directories ComfyUI already knows.
 - Banner layout shows the title alone, as a label. The pencil opens the editor; the card stays in view mode otherwise.
 - The model folder control is a dropdown of every built-in models folder plus any extra folders this ComfyUI reports. A saved folder that is not in that list stays selected.
-- The card fills the node body in the classic UI and in Nodes 2.0. The pencil, folder dropdown, download buttons, and saved card JSON work in both.
+- The card fills the node body in the classic UI and in Nodes 2.0. In Nodes 2.0 the widget grid stretches under the title instead of shrink-wrapping the text. The pencil, folder dropdown, download buttons, and saved card JSON work in both.
 - Scan workflow suggests model files selected by loaders in this graph that are not already on the card. Choose which rows to add. The file name and folder are filled in. The URL stays empty until you add one.
 
 ## 1.0.1 - 2026-11-08
