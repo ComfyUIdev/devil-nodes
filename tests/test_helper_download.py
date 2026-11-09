@@ -8,9 +8,11 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -145,6 +147,144 @@ class DownloadTests(unittest.TestCase):
         leaked = download.scrub_secrets(f"failed token={hf} at host", [hf])
         self.assertNotIn(hf, leaked)
         self.assertIn("[redacted]", leaked)
+
+    def test_hf_token_comes_from_the_process_environment_only(self):
+        names = list(download.HF_TOKEN_NAMES) + list(download.CIVITAI_TOKEN_NAMES)
+        saved = {name: os.environ.get(name) for name in names}
+        token = "hf_" + "d" * 30
+        other = "e" * 24
+        civ = "c" * 24
+
+        def refuse_open(*args, **kwargs):
+            raise AssertionError(f"token lookup opened a file: {args[:1]}")
+
+        try:
+            for name in names:
+                os.environ.pop(name, None)
+            os.environ["HF_TOKEN"] = f"  'Bearer {token}'  "
+            with patch("builtins.open", refuse_open):
+                self.assertEqual(download.lookup_hf_token(), token)
+                self.assertEqual(download.lookup_civitai_token(), "")
+            os.environ.pop("HF_TOKEN", None)
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = f"HUGGING_FACE_HUB_TOKEN={token}"
+            self.assertEqual(download.lookup_hf_token(), token)
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = "not a token"
+            os.environ["HUGGINGFACE_HUB_TOKEN"] = other
+            self.assertEqual(download.lookup_hf_token(), other)
+            os.environ["CIVITAI_API_TOKEN"] = f"Bearer {civ}"
+            self.assertEqual(download.lookup_civitai_token(), civ)
+            found = download.lookup_hf_token()
+            plain = download.request_headers("https://example.com/model.safetensors", found, civ)
+            self.assertNotIn("Authorization", plain)
+            hf_host = download.request_headers("https://hf.co/org/repo/resolve/main/a.safetensors", found, civ)
+            self.assertEqual(hf_host["Authorization"], f"Bearer {found}")
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_download_source_does_not_name_scrape_paths(self):
+        text = (ROOT / "py" / "helper_download.py").read_text(encoding="utf-8")
+        for banned in ("/proc/", "/etc/environment", "/root/.env"):
+            self.assertNotIn(banned, text)
+
+    def test_hf_cli_keeps_the_token_out_of_the_command(self):
+        spec = {"repo_id": "org/repo", "file_path": "model.safetensors", "repo_type": "model", "revision": "main"}
+        token = "hf_" + "f" * 30
+        args = download._hf_cli_args("/usr/bin/hf", spec, "/tmp/work")
+        self.assertEqual(args[:4], ["/usr/bin/hf", "download", "org/repo", "model.safetensors"])
+        self.assertIn("--type", args)
+        self.assertNotIn(token, args)
+        self.assertNotIn("--token", args)
+        legacy = download._hf_cli_args("/usr/bin/huggingface-cli", spec, "/tmp/work")
+        self.assertIn("--repo-type", legacy)
+        self.assertNotIn(token, legacy)
+        self.assertNotIn("--token", legacy)
+
+    def test_missing_hub_library_uses_the_cli_without_a_shell(self):
+        spec = {"repo_id": "org/repo", "file_path": "model.safetensors", "repo_type": "model", "revision": None}
+        token = "hf_" + "f" * 30
+        dest = self.root / "model.safetensors"
+        seen = {}
+
+        async def fake_exec(*cmd, **kwargs):
+            self.assertNotIn("shell", kwargs)
+            self.assertNotIn(token, cmd)
+            self.assertEqual(kwargs.get("env", {}).get("HF_TOKEN"), token)
+            work = cmd[cmd.index("--local-dir") + 1]
+            path = Path(work) / "model.safetensors"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"from-cli")
+            seen["cmd"] = cmd
+
+            class Proc:
+                def __init__(self):
+                    self.stdout = asyncio.StreamReader()
+                    self.stdout.feed_data(b"done\n")
+                    self.stdout.feed_eof()
+
+                async def wait(self):
+                    return 0
+
+            return Proc()
+
+        def missing(*args, **kwargs):
+            raise ImportError("no hub")
+
+        job = {"status": "downloading", "percent": 0, "speed": "", "message": "", "error": "", "filename": "model.safetensors", "folder": "checkpoints", "id": "cli"}
+        with patch.object(download, "_hub_download_blocking", missing), patch.object(download, "_hf_cli_path", return_value="/usr/bin/hf"), patch.object(download.asyncio, "create_subprocess_exec", fake_exec):
+            asyncio.run(download.download_hf(spec, str(dest), job, hf_token=token))
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(dest.read_bytes(), b"from-cli")
+        self.assertEqual(seen["cmd"][1], "download")
+        self.assertFalse((self.root / ".devil-fetch-cli").exists())
+
+    def test_missing_hub_and_cli_fall_back_to_https(self):
+        spec = {"repo_id": "org/repo", "file_path": "sub/model.safetensors", "repo_type": "model", "revision": "main"}
+        token = "hf_" + "f" * 30
+        calls = []
+
+        async def fake_http(url, dest, job, hf_token="", civitai_token=""):
+            calls.append((url, hf_token, civitai_token))
+            job["status"] = "done"
+
+        def missing(*args, **kwargs):
+            raise ImportError("no hub")
+
+        job = {"status": "downloading", "percent": 0, "speed": "", "message": "", "error": "", "filename": "model.safetensors", "folder": "checkpoints", "id": "https"}
+        with patch.object(download, "_hub_download_blocking", missing), patch.object(download, "_hf_cli_path", return_value=""), patch.object(download, "download_http", fake_http):
+            asyncio.run(download.download_hf(spec, str(self.root / "model.safetensors"), job, hf_token=token))
+        self.assertEqual(calls[0][0], "https://huggingface.co/org/repo/resolve/main/sub/model.safetensors")
+        self.assertEqual(calls[0][1], token)
+        self.assertEqual(calls[0][2], "")
+
+    def test_hub_api_gets_the_token_as_an_argument(self):
+        spec = {"repo_id": "org/repo", "file_path": "model.safetensors", "repo_type": "model", "revision": None}
+        token = "hf_" + "f" * 30
+        dest = self.root / "out.safetensors"
+        captured = {}
+
+        def fake_download(**kwargs):
+            captured.update(kwargs)
+            path = Path(kwargs["local_dir"]) / kwargs["filename"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"from-api")
+            return str(path)
+
+        fake = types.ModuleType("huggingface_hub")
+        fake.hf_hub_download = fake_download
+        job = {"id": "api", "status": "downloading", "percent": 0, "speed": "", "message": ""}
+        with patch.dict(sys.modules, {"huggingface_hub": fake}):
+            download._hub_download_blocking(spec, str(dest), job, token)
+        self.assertEqual(captured["token"], token)
+        self.assertEqual(captured["repo_id"], "org/repo")
+        self.assertEqual(dest.read_bytes(), b"from-api")
+        captured.clear()
+        with patch.dict(sys.modules, {"huggingface_hub": fake}):
+            download._hub_download_blocking(spec, str(self.root / "login.safetensors"), job, "")
+        self.assertNotIn("token", captured)
 
     def test_http_download_writes_only_the_destination(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

@@ -88,7 +88,9 @@ URLs can be:
 - a pasted `hf download hf://...` command
 - a `b2:` link, when `rclone` is on `PATH`
 
-A Hugging Face token already available to ComfyUI (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the Hub token file) is sent only to Hugging Face hosts. `CIVITAI_API_TOKEN` (or `CIVITAI_TOKEN`) is sent only to Civitai hosts. Tokens are not printed in the progress line. `b2:` downloads need rclone configured the same way you already use it.
+A Hugging Face token in the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or `HUGGINGFACE_HUB_TOKEN`) is sent only to Hugging Face hosts. `CIVITAI_API_TOKEN` (or `CIVITAI_TOKEN`) is sent only to Civitai hosts. Tokens are not printed in the progress line. `b2:` downloads need rclone configured the same way you already use it.
+
+To use a gated Hugging Face model, set `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) so the ComfyUI process can see it, or run `hf auth login`, then restart ComfyUI. When `huggingface_hub` is installed it picks up that login itself. If the library is missing and `hf` or `huggingface-cli` is on `PATH`, the download uses that command. Otherwise the file is fetched over HTTPS.
 
 The card JSON is stored on the node, so it comes back with the workflow, including copy, paste, and the API format.
 
@@ -96,7 +98,7 @@ The card JSON is stored on the node, so it comes back with the workflow, includi
 
 - ComfyUI
 - Python 3.8 or newer
-- No extra Python packages. Workflow Helper uses `aiohttp`, which ComfyUI already provides. Hugging Face downloads use `huggingface_hub` when it is installed, and otherwise fetch the file over HTTPS. `b2:` links need `rclone` on `PATH`.
+- No extra Python packages. Workflow Helper uses `aiohttp`, which ComfyUI already provides. Hugging Face downloads use `huggingface_hub` when it is installed. If it is not, and `hf` or `huggingface-cli` is on `PATH`, that command is used. Otherwise the file is fetched over HTTPS. `b2:` links need `rclone` on `PATH`.
 
 ## Nodes in this pack
 

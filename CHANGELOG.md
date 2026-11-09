@@ -9,6 +9,8 @@
 - The card fills the node body in the classic UI and in Nodes 2.0. Classic mode sizes the card in pixels from the node. Nodes 2.0 stretches the widget grid and keeps the overlay positioning, and the pencil is hit-tested from the screen so Edit and downloads still receive clicks.
 - Scan workflow suggests model files selected by loaders in this graph that are not already on the card. Choose which rows to add. The file name and folder are filled in. The URL stays empty until you add one.
 - Info tile layout shows a compact button. Clicking it opens the full card, including downloads. The how-to field styles `[teal]`, `[green]`, `[amber]`, and `[glow]` tags and pipe tables.
+- Hugging Face tokens are read from the ComfyUI process environment only. Gated downloads use `huggingface_hub` when it is installed, then the `hf` CLI, then HTTPS. The token is sent only to Hugging Face hosts.
+- Replace `icon.png` with the official 400×400 pack logo.
 
 ## 1.0.1 - 2026-11-08
 

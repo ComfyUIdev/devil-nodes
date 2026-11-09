@@ -9,9 +9,11 @@ Supported sources:
 - ``hf://org/repo/path`` and a pasted ``hf download hf://...`` command
 - ``b2:`` links, fetched with rclone when it is installed
 
-Hugging Face tokens already present in the environment (or the usual token
-file) are sent only to Hugging Face hosts. A Civitai token in the environment
-is sent only to Civitai hosts. Tokens are never written into status messages.
+A Hugging Face token is read only from this process environment. When
+``huggingface_hub`` is installed it may also use the login saved by
+``hf auth login``. That token is sent only to Hugging Face hosts. A Civitai
+token in this process environment is sent only to Civitai hosts. Tokens are
+never written into status messages.
 """
 
 from __future__ import annotations
@@ -110,108 +112,29 @@ def _rank_token(token):
     return 1
 
 
-def _read_env_file(path):
-    found = {}
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
-    except OSError:
-        return found
-    for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        if text.startswith("export "):
-            text = text[7:].strip()
-        if "=" not in text:
-            continue
-        key, value = text.split("=", 1)
-        found[key.strip()] = value
-    return found
-
-
-def _read_proc_environ(pid):
-    try:
-        with open(f"/proc/{pid}/environ", "rb") as handle:
-            raw = handle.read()
-    except OSError:
-        return {}
-    found = {}
-    for item in raw.split(b"\0"):
-        if not item or b"=" not in item:
-            continue
-        key, value = item.split(b"=", 1)
-        try:
-            found[key.decode()] = value.decode()
-        except UnicodeDecodeError:
-            continue
-    return found
-
-
-def _token_candidates(names):
-    """Collect cleaned tokens from this process, PID 1, and common env files.
-
-    ComfyUI on hosted GPU pods often does not inherit the secret the host
-    injected into PID 1 or ``/etc/environment``. The token string itself is
-    not included in the source label.
-    """
-    found = []
-
-    def take(mapping, source):
-        if not mapping:
-            return
-        for name in names:
-            raw = mapping.get(name)
-            if raw is None:
-                continue
-            cleaned = clean_token(raw)
-            if cleaned:
-                found.append((cleaned, source))
-
-    take(os.environ, "process environment")
-    for pid in (os.getpid(), os.getppid(), 1):
-        if pid:
-            take(_read_proc_environ(pid), f"process {pid} environment")
-
-    paths = ["/etc/environment", os.path.expanduser("~/.env"), "/root/.env"]
-    workspace = os.environ.get("WORKSPACE")
-    if workspace:
-        paths.append(os.path.join(workspace, ".env"))
-    for path in paths:
-        take(_read_env_file(path), os.path.basename(path))
-    return found
-
-
-def lookup_hf_token():
-    """Return a usable Hub token, preferring a real ``hf_`` token."""
+def _env_token(names):
+    """Best usable token from this process environment. Nothing else is read."""
     best = ""
     best_rank = 0
-    homes = [os.environ.get("HF_HOME") or "", os.path.expanduser("~/.cache/huggingface"), "/root/.cache/huggingface"]
-    candidates = _token_candidates(HF_TOKEN_NAMES)
-    for home in homes:
-        if not home:
-            continue
-        try:
-            with open(os.path.join(home, "token"), "r", encoding="utf-8", errors="replace") as handle:
-                raw = handle.read()
-        except OSError:
-            continue
-        cleaned = clean_token(raw)
-        if cleaned:
-            candidates.append((cleaned, "token file"))
-    for token, _source in candidates:
-        rank = _rank_token(token)
+    for name in names:
+        rank = _rank_token(clean_token(os.environ.get(name) or ""))
         if rank > best_rank:
-            best = token
+            best = clean_token(os.environ.get(name) or "")
             best_rank = rank
     return best if best_rank else ""
 
 
+def lookup_hf_token():
+    """Hub token from ``HF_TOKEN`` or the ``HUGGING*_HUB_TOKEN`` variables.
+
+    An empty result means the caller should let ``huggingface_hub`` or the
+    ``hf`` CLI use the login those tools already stored.
+    """
+    return _env_token(HF_TOKEN_NAMES)
+
+
 def lookup_civitai_token():
-    for token, _source in _token_candidates(CIVITAI_TOKEN_NAMES):
-        if token_usable(token):
-            return token
-    return ""
+    return _env_token(CIVITAI_TOKEN_NAMES)
 
 
 def request_headers(url, hf_token="", civitai_token=""):
@@ -640,13 +563,53 @@ def _make_meter(job):
     return HubMeter
 
 
+def _hf_cli_path():
+    """``hf`` when it is installed, otherwise ``huggingface-cli``."""
+    for name in ("hf", "huggingface-cli"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return ""
+
+
+def _hf_cli_args(binary, spec, work):
+    """Argv for one file. The token is never one of these arguments."""
+    repo_type = spec.get("repo_type") or "model"
+    args = [binary, "download", spec["repo_id"], spec["file_path"], "--local-dir", work]
+    if os.path.basename(binary).lower().startswith("huggingface-cli"):
+        args.extend(["--repo-type", repo_type])
+    else:
+        args.extend(["--type", repo_type if repo_type in {"dataset", "space"} else "model"])
+    if spec.get("revision"):
+        args.extend(["--revision", spec["revision"]])
+    return args
+
+
+def _place_download(saved, dest):
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if os.path.islink(saved):
+        shutil.copyfile(saved, dest)
+    else:
+        shutil.move(saved, dest)
+
+
 async def download_hf(spec, dest, job, hf_token=""):
+    """Prefer ``huggingface_hub``, then the official CLI, then HTTPS.
+
+    With no token argument, ``huggingface_hub`` and the CLI use the login
+    saved by ``hf auth login``. HTTPS sends ``hf_token`` only to Hugging
+    Face hosts.
+    """
     secrets = [hf_token] if hf_token else []
     job["secrets"] = secrets
     _note(job, message="Downloading from Hugging Face…")
     try:
         await asyncio.to_thread(_hub_download_blocking, spec, dest, job, hf_token)
     except ImportError:
+        cli = _hf_cli_path()
+        if cli:
+            await _download_hf_cli(cli, spec, dest, job, hf_token)
+            return
         await download_http(_hub_https_url(spec), dest, job, hf_token=hf_token)
         return
     except DownloadError as exc:
@@ -672,9 +635,13 @@ def _hub_download_blocking(spec, dest, job, token):
             "filename": spec["file_path"],
             "repo_type": spec.get("repo_type") or "model",
             "local_dir": work,
-            "token": token or None,
             "tqdm_class": _make_meter(job),
         }
+        # Omit token when this process has none. The library then uses the
+        # login it already stored. An explicit token is passed as an argument,
+        # not through a shell command.
+        if token:
+            kwargs["token"] = token
         if spec.get("revision"):
             kwargs["revision"] = spec["revision"]
         try:
@@ -684,10 +651,60 @@ def _hub_download_blocking(spec, dest, job, token):
             saved = hf_hub_download(**kwargs)
         if not saved or not os.path.isfile(saved):
             raise DownloadError("Hugging Face did not return a file.")
-        os.makedirs(root, exist_ok=True)
-        shutil.move(saved, dest)
+        _place_download(saved, dest)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+async def _download_hf_cli(binary, spec, dest, job, hf_token):
+    secrets = job.get("secrets") or ([hf_token] if hf_token else [])
+    root = os.path.dirname(dest)
+    work = os.path.join(root, f".devil-fetch-{job.get('id', 'hf')}")
+    os.makedirs(work, exist_ok=True)
+    cmd = _hf_cli_args(binary, spec, work)
+    env = os.environ.copy()
+    if hf_token:
+        env["HF_TOKEN"] = hf_token
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+    except FileNotFoundError:
+        shutil.rmtree(work, ignore_errors=True)
+        await download_http(_hub_https_url(spec), dest, job, hf_token=hf_token)
+        return
+    tail = ""
+    try:
+        assert proc.stdout is not None
+        while True:
+            chunk = await proc.stdout.read(8192)
+            if not chunk:
+                break
+            line = scrub_secrets(chunk.decode(errors="ignore").replace("\r", "\n").strip(), secrets)
+            if line:
+                tail = line[-180:]
+                match = _PERCENT.search(line)
+                if match:
+                    _note(job, percent=int(match.group(1)), message=tail)
+                else:
+                    _note(job, message=tail)
+        code = await proc.wait()
+        if code != 0:
+            detail = f" {tail}" if tail else ""
+            _fail(job, f"Hugging Face CLI exited with code {code}.{detail}", secrets)
+            return
+        saved = os.path.join(work, *spec["file_path"].split("/"))
+        if not os.path.isfile(saved):
+            _fail(job, "Hugging Face CLI did not return a file.", secrets)
+            return
+        _place_download(saved, dest)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if job.get("status") == "downloading":
+        _finish(job, dest)
 
 
 async def download_b2(url, dest, job):
@@ -737,7 +754,7 @@ def _note_rclone(job, line):
     if match:
         _note(job, percent=int(match.group(1)), speed=speed.group(1).strip() if speed else "")
     elif line.strip():
-        _note(job, message=line.strip()[-180])
+        _note(job, message=line.strip()[-180:])
 
 
 async def run_spec(spec, job, hf_token="", civitai_token=""):
