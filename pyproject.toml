@@ -1,6 +1,6 @@
 [project]
 name = "devil-nodes"
-version = "1.0.1"
+version = "1.1.0"
 description = "ComfyUI nodes by ComfyUIdev. Favorite jumps to a saved canvas anchor. Workflow Helper is a shareable workflow card with a Markdown how-to, model downloads, and pack checks."
 license = { file = "LICENSE" }
 requires-python = ">=3.8"

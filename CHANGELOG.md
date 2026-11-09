@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-11-09
 
 - Add Workflow Helper: a card saved in the workflow with a title, a Markdown how-to, model rows, custom node packs, and author links. Each model and pack row is marked installed or missing on the ComfyUI that opens the workflow.
 - Model Download buttons fetch the row URL (direct http(s), Hugging Face, Civitai, `hf://`, and `b2:` via rclone) into that row's models folder, with progress and errors on the card. Files are written only inside model directories ComfyUI already knows.
