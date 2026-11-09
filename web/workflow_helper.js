@@ -53,7 +53,7 @@ const CSS = `
 .dh-title{margin:0;color:#fff7f4;font-size:22px;font-weight:700;line-height:1.15;overflow-wrap:anywhere;}
 .dh-banner .dh-title{font-size:28px;}
 .dh-banner .dh-head{padding-top:16px;padding-bottom:16px;}
-.dh-edit{position:absolute;top:8px;right:8px;width:26px;height:26px;border:1px solid transparent;border-radius:6px;background:transparent;color:#c9b2ac;cursor:pointer;}
+.dh-edit{position:absolute;z-index:3;top:8px;right:8px;width:26px;height:26px;border:1px solid transparent;border-radius:6px;background:transparent;color:#c9b2ac;cursor:pointer;}
 .dh-edit:hover{border-color:#6a403c;background:#2a1c1a;color:#fff;}
 .dh-empty{padding:4px 14px 8px;color:#b5a29c;}
 .dh-section{padding:8px 14px 0;}
@@ -153,6 +153,75 @@ function el(tag, className, text) {
 function stopDrag(node) {
   node.addEventListener("pointerdown", (event) => event.stopPropagation());
   node.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+}
+
+function pointIn(event, element) {
+  if (!element?.isConnected) return false;
+  const rect = element.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return false;
+  return event.clientX >= rect.left && event.clientX <= rect.right
+    && event.clientY >= rect.top && event.clientY <= rect.bottom;
+}
+
+const liveHelpers = new Set();
+let helperHitsInstalled = false;
+
+function recent(state, key) {
+  const now = performance.now();
+  const last = state.hitAt?.[key] || 0;
+  if (now - last < 400) return true;
+  state.hitAt = state.hitAt || {};
+  state.hitAt[key] = now;
+  return false;
+}
+
+function onHelperPointerUp(event) {
+  if (event.button !== 0) return;
+  for (const state of liveHelpers) {
+    if (!state.root?.isConnected || !vueNode(state.root)) continue;
+    const edit = state.root.querySelector(".dh-edit");
+    if (edit && pointIn(event, edit)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!recent(state, "edit")) openCardEditor(state);
+      return;
+    }
+    for (const button of state.root.querySelectorAll(".dh-dl")) {
+      if (!pointIn(event, button) || button.disabled) continue;
+      if (!button.contains(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        button.click();
+      }
+      return;
+    }
+  }
+}
+
+function onHelperContextMenu(event) {
+  for (const state of liveHelpers) {
+    const chrome = vueNode(state.root);
+    if (!chrome || !state.root?.isConnected || !pointIn(event, state.root)) continue;
+    if (chrome.contains(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    chrome.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: 2,
+    }));
+    return;
+  }
+}
+
+function trackHelper(state) {
+  liveHelpers.add(state);
+  if (helperHitsInstalled) return;
+  helperHitsInstalled = true;
+  document.addEventListener("pointerup", onHelperPointerUp, true);
+  document.addEventListener("contextmenu", onHelperContextMenu, true);
 }
 
 function cardWidget(node) {
@@ -477,7 +546,14 @@ function modelRowView(state, row) {
       const where = hostOf(row.url) || "the source";
       button.title = `Download into ${folderLabel(row.folder)} from ${where}`;
       stopDrag(button);
-      button.addEventListener("click", () => startDownload(state, row, view));
+      const begin = (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        if (recent(state, `dl:${row.folder}/${row.name}`)) return;
+        startDownload(state, row, view);
+      };
+      button.addEventListener("pointerup", begin);
+      button.addEventListener("click", begin);
       action.append(button);
     },
     showProgress(percent, message) {
@@ -508,7 +584,14 @@ function modelRowView(state, row) {
       const button = el("button", "dh-dl", "Retry");
       button.type = "button";
       stopDrag(button);
-      button.addEventListener("click", () => startDownload(state, row, view));
+      const begin = (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        if (recent(state, `dl:${row.folder}/${row.name}`)) return;
+        startDownload(state, row, view);
+      };
+      button.addEventListener("pointerup", begin);
+      button.addEventListener("click", begin);
       action.append(button);
       status.classList.add("is-error");
       status.textContent = message || "Download failed";
@@ -683,7 +766,6 @@ function fillVueNode(root) {
     grid.style.setProperty("grid-template-columns", "minmax(0, 1fr)", "important");
     grid.style.setProperty("grid-template-rows", rows.join(" "), "important");
   }
-  root.style.setProperty("pointer-events", "auto", "important");
   root.style.setProperty("width", "100%", "important");
   root.style.setProperty("height", "100%", "important");
   root.style.setProperty("min-width", `${boxW}px`, "important");
@@ -691,6 +773,15 @@ function fillVueNode(root) {
   root.style.setProperty("max-width", "none", "important");
   root.style.setProperty("flex", "1 1 auto", "important");
   root.style.setProperty("align-self", "stretch", "important");
+  // Parents often set pointer-events: none. auto on the card and each
+  // wrapper up to the node lets the pencil and downloads receive hits.
+  // position and transform stay as ComfyUI set them.
+  let el = root;
+  while (el) {
+    el.style.setProperty("pointer-events", "auto", "important");
+    if (el === chrome) break;
+    el = el.parentElement;
+  }
   const placed = getComputedStyle(root);
   if (placed.position === "fixed" || placed.position === "absolute") {
     root.style.setProperty("width", `${boxW}px`, "important");
@@ -751,7 +842,15 @@ function renderCard(state) {
   edit.type = "button";
   edit.title = "Edit Workflow Helper";
   stopDrag(edit);
-  edit.addEventListener("click", () => openCardEditor(state));
+  const openEdit = (event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (recent(state, "edit")) return;
+    openCardEditor(state);
+  };
+  edit.addEventListener("pointerup", openEdit);
+  edit.addEventListener("click", openEdit);
   head.append(edit);
   scroll.append(head);
 
@@ -1239,6 +1338,7 @@ function attach(node) {
       state.slotObserver?.disconnect();
       state.slotObserver = null;
       state.observed = null;
+      liveHelpers.delete(state);
       if (openEditor?.nodeId === node.id) closeEditor();
       node.workflowHelper = null;
     },
@@ -1277,6 +1377,7 @@ function attach(node) {
     state.dom = dom;
   }
 
+  trackHelper(state);
   renderCard(state);
   const width = Math.max(node.size?.[0] || 0, 480);
   const height = Math.max(node.size?.[1] || 0, preferredHeight(state.card) + 48);
