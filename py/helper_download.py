@@ -9,12 +9,12 @@ Supported sources:
 - ``hf://org/repo/path`` and a pasted ``hf download hf://...`` command
 - ``b2:`` links, fetched with rclone when it is installed
 
-A Hugging Face token comes from this process environment
-(``HF_TOKEN``, ``HUGGING_FACE_HUB_TOKEN``, or ``HUGGINGFACE_HUB_TOKEN``).
-When none of those is usable and ``huggingface_hub`` is installed, the
-login saved by ``hf auth login`` is used. That token is sent only to
-Hugging Face hosts. A Civitai token in this process environment is sent
-only to Civitai hosts. Tokens are never written into status messages.
+A Hugging Face token comes only from ``huggingface_hub.get_token``
+(``HF_TOKEN`` or the login saved by ``hf auth login``). This module does
+not read process variables. With no token, public files still download,
+and a gated file tells the user how to sign in. A Civitai token is posted
+from the node and sent only to Civitai hosts. Tokens are never written
+into status messages.
 """
 
 from __future__ import annotations
@@ -36,6 +36,13 @@ HF_PAGE_HOSTS = {"huggingface.co", "www.huggingface.co", "hf.co"}
 CIVITAI_HOSTS = {"civitai.com", "www.civitai.com", "civitai.red", "www.civitai.red"}
 USER_AGENT = "devil-nodes/workflow-helper"
 PARTIAL_SUFFIX = ".devilpart"
+HF_AUTH_MESSAGE = (
+    "This file needs a Hugging Face token. Set HF_TOKEN or run `hf auth login`, then restart ComfyUI."
+)
+CIVITAI_AUTH_MESSAGE = (
+    "This file needs a Civitai token. Enter it in the Civitai token field on Workflow Helper. "
+    "It stays in this browser and is not saved in the workflow."
+)
 # One socket operation, connect or read. The download itself is not capped.
 HTTP_TIMEOUT_SECONDS = 300
 
@@ -109,14 +116,6 @@ def scrub_secrets(message, secrets):
     return text[:500]
 
 
-def _rank_token(token):
-    if not token_usable(token):
-        return 0
-    if token.startswith("hf_"):
-        return 2
-    return 1
-
-
 def _accept_hub_token(raw):
     """A token ``huggingface_hub`` already resolved, or empty.
 
@@ -135,77 +134,65 @@ def _accept_hub_token(raw):
     return token
 
 
-def _process_env_token(names):
-    """Best usable token among ``names`` in this process environment.
+def lookup_hf_token():
+    """Token from ``huggingface_hub.get_token``, or an empty string.
 
-    Only those names are considered. Token files are not opened here.
-    An earlier name wins when two values are equally good, and a value
-    that starts with ``hf_`` beats one that does not.
-    """
-    order = {name: index for index, name in enumerate(names)}
-    best = ""
-    best_rank = 0
-    best_index = len(names)
-    for name, value in list(os.environ.items()):
-        index = order.get(name)
-        if index is None:
-            continue
-        token = clean_token(value or "")
-        rank = _rank_token(token)
-        if not rank:
-            continue
-        if rank > best_rank or (rank == best_rank and index < best_index):
-            best = token
-            best_rank = rank
-            best_index = index
-    return best
-
-
-def _saved_hf_login():
-    """Token stored by ``hf auth login``, when ``huggingface_hub`` is installed.
-
-    A failure here returns no token. Public downloads still run, and
-    ``hf_hub_download`` reports its own error if a gated file needs auth.
+    That helper reads ``HF_TOKEN`` and the login saved by ``hf auth login``.
+    This module does not. Public files still download when the result is empty.
     """
     try:
-        import huggingface_hub
+        from huggingface_hub import get_token
     except ImportError:
         return ""
-    getter = getattr(huggingface_hub, "get_token", None)
-    if getter is None:
-        folder = getattr(huggingface_hub, "HfFolder", None)
-        getter = getattr(folder, "get_token", None) if folder is not None else None
-    if not callable(getter):
-        return ""
     try:
-        raw = getter()
-    except Exception:  # noqa: BLE001 - a broken login lookup must not block a public download
+        raw = get_token()
+    except Exception:  # noqa: BLE001 - a failed lookup must not block a public file
         return ""
     if not isinstance(raw, str):
         return ""
     return _accept_hub_token(raw)
 
 
-def lookup_hf_token():
-    """Token for Hugging Face hosts.
-
-    Named variables in this process win, including the cleaning of a copied
-    ``Bearer`` prefix or ``KEY=`` line. ``huggingface_hub`` does not read
-    ``HUGGINGFACE_HUB_TOKEN`` and only strips whitespace, so that library is
-    not the first source. When no named variable is usable, ``get_token``
-    supplies the login saved by ``hf auth login``. An empty string means
-    neither source had a usable token. The ``hf`` CLI can still see variables
-    it inherits, and a public HTTPS download still runs.
-    """
-    found = _process_env_token(HF_TOKEN_NAMES)
-    if found:
-        return found
-    return _saved_hf_login()
+def civitai_token_from_request(data):
+    """Civitai token posted by the node. No other source is consulted."""
+    if not isinstance(data, dict):
+        return ""
+    raw = data.get("civitai_token")
+    if not isinstance(raw, str):
+        return ""
+    token = clean_token(raw)
+    return token if token_usable(token) else ""
 
 
-def lookup_civitai_token():
-    """Token for Civitai hosts, from this process environment only."""
-    return _process_env_token(CIVITAI_TOKEN_NAMES)
+def _auth_failure_text(value):
+    text = str(value or "").lower()
+    return any(mark in text for mark in ("401", "403", "gated", "unauthorized"))
+
+
+def refusal_for_status(status, url):
+    """Error for a failed HTTP status, or None when the body can be saved."""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if status in {401, 403} and host in HF_PAGE_HOSTS:
+        return DownloadError(HF_AUTH_MESSAGE)
+    if status in {401, 403} and host in CIVITAI_HOSTS:
+        return DownloadError(CIVITAI_AUTH_MESSAGE)
+    if status == 401:
+        return DownloadError("The host refused the download (401). A token may be required.")
+    if status == 403:
+        return DownloadError("The host refused the download (403).")
+    if status == 404:
+        return DownloadError("The file was not found (404).")
+    if status is None or status >= 400 or status < 200:
+        return DownloadError(f"The host returned HTTP {status}.")
+    return None
+
+
+def _hf_failure_message(exc):
+    if _auth_failure_text(type(exc).__name__) or _auth_failure_text(exc):
+        return HF_AUTH_MESSAGE
+    if isinstance(exc, DownloadError):
+        return str(exc)
+    return f"Hugging Face download failed: {exc}"
 
 
 def request_headers(url, hf_token="", civitai_token=""):
@@ -535,14 +522,9 @@ def _download_http_blocking(url, dest, job, hf_token="", civitai_token=""):
                         raise DownloadError("The host redirected away from http.")
                     current = nxt
                     continue
-                if status == 401:
-                    raise DownloadError("The host refused the download (401). A token may be required.")
-                if status == 403:
-                    raise DownloadError("The host refused the download (403).")
-                if status == 404:
-                    raise DownloadError("The file was not found (404).")
-                if status >= 400 or status < 200:
-                    raise DownloadError(f"The host returned HTTP {status}.")
+                failed = refusal_for_status(status, current)
+                if failed is not None:
+                    raise failed
                 ctype = (_header(response, "Content-Type") or "").lower()
                 if "text/html" in ctype:
                     raise DownloadError("The link returned a web page, not a model file.")
@@ -707,9 +689,9 @@ def _place_download(saved, dest):
 async def download_hf(spec, dest, job, hf_token=""):
     """Prefer ``huggingface_hub``, then the official CLI, then HTTPS.
 
-    With no token argument, ``huggingface_hub`` and the CLI use the login
-    saved by ``hf auth login``. HTTPS sends ``hf_token`` only to Hugging
-    Face hosts.
+    With no token argument, the library and the CLI use the login saved
+    by ``hf auth login``. The CLI is started without a custom environment.
+    HTTPS sends ``hf_token`` only to Hugging Face hosts.
     """
     secrets = [hf_token] if hf_token else []
     job["secrets"] = secrets
@@ -724,10 +706,10 @@ async def download_hf(spec, dest, job, hf_token=""):
         await download_http(_hub_https_url(spec), dest, job, hf_token=hf_token)
         return
     except DownloadError as exc:
-        _fail(job, str(exc), secrets)
+        _fail(job, _hf_failure_message(exc), secrets)
         return
     except Exception as exc:  # noqa: BLE001
-        _fail(job, f"Hugging Face download failed: {exc}", secrets)
+        _fail(job, _hf_failure_message(exc), secrets)
         return
     _finish(job, dest)
 
@@ -773,15 +755,12 @@ async def _download_hf_cli(binary, spec, dest, job, hf_token):
     work = os.path.join(root, f".devil-fetch-{job.get('id', 'hf')}")
     os.makedirs(work, exist_ok=True)
     cmd = _hf_cli_args(binary, spec, work)
-    env = os.environ.copy()
-    if hf_token:
-        env["HF_TOKEN"] = hf_token
+    # No custom environment. The CLI finds HF_TOKEN or its saved login itself.
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=env,
         )
     except FileNotFoundError:
         shutil.rmtree(work, ignore_errors=True)
@@ -804,8 +783,11 @@ async def _download_hf_cli(binary, spec, dest, job, hf_token):
                     _note(job, message=tail)
         code = await proc.wait()
         if code != 0:
-            detail = f" {tail}" if tail else ""
-            _fail(job, f"Hugging Face CLI exited with code {code}.{detail}", secrets)
+            if _auth_failure_text(tail):
+                _fail(job, HF_AUTH_MESSAGE, secrets)
+            else:
+                detail = f" {tail}" if tail else ""
+                _fail(job, f"Hugging Face CLI exited with code {code}.{detail}", secrets)
             return
         saved = os.path.join(work, *spec["file_path"].split("/"))
         if not os.path.isfile(saved):
@@ -943,7 +925,11 @@ def setup_routes():
             spec = prepare_download(data, installed_model_folders())
         except (DestinationError, SourceError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
-        view = begin_download(spec, hf_token=lookup_hf_token(), civitai_token=lookup_civitai_token())
+        view = begin_download(
+            spec,
+            hf_token=lookup_hf_token(),
+            civitai_token=civitai_token_from_request(data),
+        )
         return web.json_response(view)
 
     async def status(request):

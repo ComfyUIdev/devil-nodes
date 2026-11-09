@@ -19,8 +19,10 @@ class WorkflowHelper:
         "models the workflow needs, the custom node packs it depends on, "
         "and the author's links. Each model and pack is marked installed "
         "or missing on this ComfyUI. Download fetches the URL on a model "
-        "row into that row's models folder. Click the pencil to edit. "
-        "The banner layout is a plain title label. Nothing runs."
+        "row into that row's models folder. A Civitai token typed on the "
+        "card stays in this browser and is not saved with the workflow. "
+        "Click the pencil to edit. The banner layout is a plain title "
+        "label. Nothing runs."
     )
     SEARCH_ALIASES = [
         "workflow helper",
@@ -48,7 +50,8 @@ class WorkflowHelper:
                         "tooltip": (
                             "Workflow Helper card as JSON: title, markdown, "
                             "models, packs, and links. The pencil edits this. "
-                            "It is saved with the workflow."
+                            "It is saved with the workflow. A Civitai token "
+                            "typed on the card is not part of this JSON."
                         ),
                     },
                 ),

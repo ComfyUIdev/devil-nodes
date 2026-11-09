@@ -4,7 +4,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CIVITAI_TOKEN_STORAGE_KEY,
   cardHasContent,
+  civitaiHost,
+  downloadBody,
   folderChoices,
   folderForWidget,
   folderLabel,
@@ -19,7 +22,9 @@ import {
   normalizeCard,
   packsFromNodes,
   parseMarkdown,
+  rememberCivitaiToken,
   showsTile,
+  storedCivitaiToken,
   tileIsDownloadList,
   safeLink,
   serializeCard,
@@ -106,6 +111,56 @@ test("card json round-trips the fields a shared workflow needs", () => {
   assert.deepEqual(again, card);
   assert.equal(cardHasContent(card), true);
   assert.equal(cardHasContent(normalizeCard("{}")), false);
+});
+
+test("a civitai token is not part of the saved card and is sent only to civitai", () => {
+  const secret = "c".repeat(32);
+  const card = normalizeCard({
+    title: "T",
+    body: "How to run",
+    civitai_token: secret,
+    civitaiToken: secret,
+    token: secret,
+    models: [{ name: "a.safetensors", folder: "checkpoints", url: "https://civitai.com/api/download/models/7" }],
+  });
+  const saved = serializeCard(card);
+  assert.equal(saved.includes(secret), false);
+  assert.equal(card.civitai_token, undefined);
+  assert.equal(card.civitaiToken, undefined);
+  assert.equal(card.token, undefined);
+
+  const storage = {
+    data: new Map(),
+    getItem(key) {
+      return this.data.has(key) ? this.data.get(key) : null;
+    },
+    setItem(key, value) {
+      this.data.set(key, String(value));
+    },
+    removeItem(key) {
+      this.data.delete(key);
+    },
+  };
+  assert.equal(rememberCivitaiToken(storage, `  ${secret}  `), secret);
+  assert.equal(storage.data.get(CIVITAI_TOKEN_STORAGE_KEY), secret);
+  assert.equal(storedCivitaiToken(storage), secret);
+  assert.equal(rememberCivitaiToken(storage, "   "), "");
+  assert.equal(storedCivitaiToken(storage), "");
+
+  const civ = downloadBody(
+    { url: "https://www.civitai.com/api/download/models/7", name: "a.safetensors", folder: "checkpoints" },
+    secret,
+  );
+  assert.equal(civ.civitai_token, secret);
+  assert.equal(civitaiHost(civ.url), true);
+  const hf = downloadBody(
+    { url: "https://huggingface.co/org/repo/resolve/main/a.safetensors", name: "a.safetensors", folder: "checkpoints" },
+    secret,
+  );
+  assert.equal(hf.civitai_token, undefined);
+  assert.equal(JSON.stringify(hf).includes(secret), false);
+  const cdn = downloadBody({ url: "https://cdn.example/a.safetensors", name: "a.safetensors", folder: "checkpoints" }, secret);
+  assert.equal(cdn.civitai_token, undefined);
 });
 
 test("unsafe urls are dropped and download urls keep the schemes the server fetches", () => {

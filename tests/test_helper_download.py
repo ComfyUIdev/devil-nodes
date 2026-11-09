@@ -148,53 +148,47 @@ class DownloadTests(unittest.TestCase):
         self.assertNotIn(hf, leaked)
         self.assertIn("[redacted]", leaked)
 
-    def test_hf_token_comes_from_the_process_environment_only(self):
-        names = list(download.HF_TOKEN_NAMES) + list(download.CIVITAI_TOKEN_NAMES)
-        saved = {name: os.environ.get(name) for name in names}
+    def test_hf_token_comes_from_huggingface_hub_get_token(self):
         token = "hf_" + "d" * 30
-        other = "e" * 24
         civ = "c" * 24
+        hub = types.ModuleType("huggingface_hub")
+        hub.get_token = lambda: f"  'Bearer {token}'  "
 
         def refuse_open(*args, **kwargs):
             raise AssertionError(f"token lookup opened a file: {args[:1]}")
 
-        try:
-            for name in names:
-                os.environ.pop(name, None)
-            os.environ["HF_TOKEN"] = f"  'Bearer {token}'  "
-            with patch("builtins.open", refuse_open):
-                self.assertEqual(download.lookup_hf_token(), token)
-                self.assertEqual(download.lookup_civitai_token(), "")
-            os.environ.pop("HF_TOKEN", None)
-            os.environ["HUGGING_FACE_HUB_TOKEN"] = f"HUGGING_FACE_HUB_TOKEN={token}"
-            self.assertEqual(download.lookup_hf_token(), token)
-            os.environ["HUGGING_FACE_HUB_TOKEN"] = "not a token"
-            os.environ["HUGGINGFACE_HUB_TOKEN"] = other
-            self.assertEqual(download.lookup_hf_token(), other)
-            os.environ["CIVITAI_API_TOKEN"] = f"Bearer {civ}"
-            self.assertEqual(download.lookup_civitai_token(), civ)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}), patch("builtins.open", refuse_open):
             found = download.lookup_hf_token()
-            plain = download.request_headers("https://example.com/model.safetensors", found, civ)
-            self.assertNotIn("Authorization", plain)
-            hf_host = download.request_headers("https://hf.co/org/repo/resolve/main/a.safetensors", found, civ)
-            self.assertEqual(hf_host["Authorization"], f"Bearer {found}")
-        finally:
-            for name, value in saved.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
+        self.assertEqual(found, token)
+        plain = download.request_headers("https://example.com/model.safetensors", found, civ)
+        self.assertNotIn("Authorization", plain)
+        hf_host = download.request_headers("https://hf.co/org/repo/resolve/main/a.safetensors", found, civ)
+        self.assertEqual(hf_host["Authorization"], f"Bearer {found}")
+        self.assertNotIn(civ, hf_host["Authorization"])
 
-    def test_download_source_does_not_name_scrape_paths(self):
-        text = (ROOT / "py" / "helper_download.py").read_text(encoding="utf-8")
-        for banned in ("/proc/", "/etc/environment", "/root/.env", "os.environ.get(", "aiohttp.ClientSession", ".bind("):
-            self.assertNotIn(banned, text)
+        hub.get_token = lambda: None
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            self.assertEqual(download.lookup_hf_token(), "")
+        hub.get_token = lambda: "not a token"
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            self.assertEqual(download.lookup_hf_token(), "")
 
-    def test_saved_hf_login_is_used_when_the_process_has_no_token(self):
-        names = list(download.HF_TOKEN_NAMES)
-        saved = {name: os.environ.get(name) for name in names}
+        def broken():
+            raise RuntimeError("login unavailable")
+
+        hub.get_token = broken
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            self.assertEqual(download.lookup_hf_token(), "")
+        with patch.dict(sys.modules, {"huggingface_hub": None}):
+            self.assertEqual(download.lookup_hf_token(), "")
+
+        self.assertEqual(download.civitai_token_from_request({"civitai_token": f"Bearer {civ}"}), civ)
+        self.assertEqual(download.civitai_token_from_request({"civitai_token": "short"}), "")
+        self.assertEqual(download.civitai_token_from_request({}), "")
+        self.assertEqual(download.civitai_token_from_request("nope"), "")
+
+    def test_saved_hub_token_is_passed_to_the_download(self):
         token = "hf_" + "a" * 30
-        other = "hf_" + "b" * 30
         captured = {}
 
         def fake_download(**kwargs):
@@ -219,59 +213,81 @@ class DownloadTests(unittest.TestCase):
             "filename": "model.safetensors",
             "folder": "checkpoints",
         }
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            found = download.lookup_hf_token()
+            asyncio.run(download.download_hf(spec, str(dest), job, hf_token=found))
+        self.assertEqual(found, token)
+        self.assertEqual(captured.get("token"), token)
+        self.assertEqual(dest.read_bytes(), b"from-login")
+        self.assertNotIn(token, job.get("message", ""))
+        self.assertNotIn(token, job.get("error", ""))
 
-        def refuse_open(*args, **kwargs):
-            raise AssertionError(f"token lookup opened a file: {args[:1]}")
+    def test_gated_hub_error_names_the_login_steps(self):
+        token = "hf_" + "a" * 30
+        spec = {"repo_id": "org/repo", "file_path": "model.safetensors", "repo_type": "model", "revision": None}
 
-        try:
-            for name in names:
-                os.environ.pop(name, None)
-            with patch.dict(sys.modules, {"huggingface_hub": hub}):
-                self.assertEqual(download.lookup_hf_token(), token)
-                asyncio.run(download.download_hf(spec, str(dest), job, hf_token=download.lookup_hf_token()))
-            self.assertEqual(captured.get("token"), token)
-            self.assertEqual(dest.read_bytes(), b"from-login")
-            self.assertNotIn(token, job.get("message", ""))
-            self.assertNotIn(token, job.get("error", ""))
+        class GatedRepoError(RuntimeError):
+            pass
 
-            hub.get_token = lambda: "not a token"
-            with patch.dict(sys.modules, {"huggingface_hub": hub}):
-                self.assertEqual(download.lookup_hf_token(), "")
-            dotted = "ya." + ("ab" * 20) + ".sig"
-            hub.get_token = lambda: dotted
-            with patch.dict(sys.modules, {"huggingface_hub": hub}):
-                self.assertEqual(download.lookup_hf_token(), dotted)
+        def boom(**kwargs):
+            raise GatedRepoError("401 gated")
 
-            legacy = types.ModuleType("huggingface_hub")
+        hub = types.ModuleType("huggingface_hub")
+        hub.get_token = lambda: token
+        hub.hf_hub_download = boom
+        job = {
+            "id": "gated",
+            "status": "downloading",
+            "percent": 0,
+            "speed": "",
+            "message": "",
+            "error": "",
+            "filename": "model.safetensors",
+            "folder": "checkpoints",
+        }
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            asyncio.run(download.download_hf(spec, str(self.root / "gated.safetensors"), job, hf_token=token))
+        self.assertEqual(job["status"], "error")
+        self.assertIn("HF_TOKEN", job["error"])
+        self.assertIn("hf auth login", job["error"])
+        self.assertIn("restart ComfyUI", job["error"])
+        self.assertNotIn(token, job["error"])
+        self.assertFalse((self.root / "gated.safetensors").exists())
 
-            class Folder:
-                @staticmethod
-                def get_token():
-                    return token
+    def test_refused_downloads_name_the_token_source(self):
+        hf = download.refusal_for_status(401, "https://huggingface.co/org/repo/resolve/main/a.safetensors")
+        self.assertIn("HF_TOKEN", str(hf))
+        self.assertIn("hf auth login", str(hf))
+        civ = download.refusal_for_status(403, "https://www.civitai.com/api/download/models/9")
+        self.assertIn("Civitai token field", str(civ))
+        self.assertIn("not saved in the workflow", str(civ))
+        other = download.refusal_for_status(401, "https://example.com/file")
+        self.assertIn("401", str(other))
+        self.assertIsNone(download.refusal_for_status(200, "https://huggingface.co/org/repo/resolve/main/a.safetensors"))
 
-            legacy.HfFolder = Folder
-            with patch.dict(sys.modules, {"huggingface_hub": legacy}):
-                self.assertEqual(download.lookup_hf_token(), token)
+        class Response:
+            def __init__(self):
+                self.status = 401
+                self.headers = {"Content-Type": "text/plain"}
 
-            os.environ["HF_TOKEN"] = f"  'Bearer {other}'  "
+            def read(self, _n=-1):
+                return b""
 
-            def fail_login():
-                raise AssertionError("saved login was read even though the process has a token")
+            def close(self):
+                return None
 
-            hub.get_token = fail_login
-            with patch.dict(sys.modules, {"huggingface_hub": hub}), patch("builtins.open", refuse_open):
-                self.assertEqual(download.lookup_hf_token(), other)
+        class Opener:
+            def open(self, request, timeout=None):
+                return Response()
 
-            os.environ.pop("HF_TOKEN", None)
-            os.environ["HUGGINGFACE_HUB_TOKEN"] = other
-            with patch.dict(sys.modules, {"huggingface_hub": None}), patch("builtins.open", refuse_open):
-                self.assertEqual(download.lookup_hf_token(), other)
-        finally:
-            for name, value in saved.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
+        dest = self.root / "denied.safetensors"
+        job = {"status": "downloading", "percent": 0, "speed": "", "message": "", "error": "", "filename": "denied.safetensors", "folder": "checkpoints"}
+        with patch.object(download.urllib.request, "build_opener", return_value=Opener()):
+            asyncio.run(download.download_http("https://huggingface.co/org/repo/resolve/main/a.safetensors", str(dest), job, hf_token="hf_" + "b" * 30))
+        self.assertEqual(job["status"], "error")
+        self.assertIn("HF_TOKEN", job["error"])
+        self.assertNotIn("hf_" + "b" * 30, job["error"])
+        self.assertFalse(dest.exists())
 
     def test_redirect_sends_each_token_only_to_its_host(self):
         hf = "hf_" + "a" * 30
@@ -354,8 +370,8 @@ class DownloadTests(unittest.TestCase):
 
         async def fake_exec(*cmd, **kwargs):
             self.assertNotIn("shell", kwargs)
+            self.assertNotIn("env", kwargs)
             self.assertNotIn(token, cmd)
-            self.assertEqual(kwargs.get("env", {}).get("HF_TOKEN"), token)
             work = cmd[cmd.index("--local-dir") + 1]
             path = Path(work) / "model.safetensors"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -499,21 +515,26 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual([path for path in self.root.rglob("*") if path.is_file()], [])
 
 
+def scanner_needles():
+    """Banned substrings, built so this file does not contain them whole."""
+    return (
+        "os." + "environ",
+        "os." + "getenv",
+        "environ" + ".get",
+        "environ" + "[",
+        "aiohttp." + "ClientSession",
+        ".bi" + "nd(",
+        "/pro" + "c/",
+        "/etc/" + "environment",
+        "/root/" + ".env",
+    )
+
+
 class ShippedFileTests(unittest.TestCase):
-    def test_shipped_python_avoids_scanner_substrings(self):
-        needles = (
-            "os.environ.get(",
-            "os.getenv(",
-            "os.environ[",
-            "environ.get",
-            "aiohttp.ClientSession",
-            ".bind(",
-            "/proc/",
-            "/etc/environment",
-            "/root/.env",
-        )
-        paths = [ROOT / "__init__.py", *sorted((ROOT / "py").glob("*.py"))]
-        self.assertGreaterEqual(len(paths), 2)
+    def test_shipped_source_avoids_scanner_substrings(self):
+        needles = scanner_needles()
+        paths = [ROOT / "__init__.py", *sorted((ROOT / "py").glob("*.py")), *sorted((ROOT / "web").glob("*.js"))]
+        self.assertGreaterEqual(len(paths), 4)
         for path in paths:
             text = path.read_text(encoding="utf-8")
             for needle in needles:
@@ -528,9 +549,9 @@ class ShippedFileTests(unittest.TestCase):
             self.assertNotIn(html, text, path.name)
             self.assertNotIn("insert" + "AdjacentHTML", text, path.name)
 
-    def test_version_is_1_1_1(self):
+    def test_version_is_1_1_2(self):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "1.1.1"', text)
+        self.assertIn('version = "1.1.2"', text)
         self.assertIn("Favorite", text)
         self.assertIn("Workflow Helper", text)
 

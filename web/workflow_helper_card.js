@@ -70,6 +70,48 @@ export function hostOf(url) {
   }
 }
 
+/** Browser storage key for the Civitai token. It is not part of the card. */
+export const CIVITAI_TOKEN_STORAGE_KEY = "devil-nodes.workflow-helper.civitai-token";
+
+export function civitaiHost(url) {
+  const host = hostOf(url);
+  return host === "civitai.com" || host === "civitai.red";
+}
+
+export function storedCivitaiToken(storage) {
+  if (!storage || typeof storage.getItem !== "function") return "";
+  try {
+    const value = storage.getItem(CIVITAI_TOKEN_STORAGE_KEY);
+    return typeof value === "string" ? value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+export function rememberCivitaiToken(storage, value) {
+  const text = String(value ?? "").trim();
+  if (!storage || typeof storage.setItem !== "function") return text;
+  try {
+    if (text) storage.setItem(CIVITAI_TOKEN_STORAGE_KEY, text);
+    else if (typeof storage.removeItem === "function") storage.removeItem(CIVITAI_TOKEN_STORAGE_KEY);
+  } catch {
+    // The browser refused storage. The caller can still hold the text.
+  }
+  return text;
+}
+
+/** Download POST body. The Civitai token is attached only for Civitai hosts. */
+export function downloadBody(row, civitaiToken) {
+  const body = {
+    url: row?.url || "",
+    filename: row?.name || "",
+    folder: row?.folder || "",
+  };
+  const token = typeof civitaiToken === "string" ? civitaiToken.trim() : "";
+  if (token && civitaiHost(body.url)) body.civitai_token = token;
+  return body;
+}
+
 export function baseName(path) {
   const text = clip(path, 1000).replace(/\\/g, "/").trim();
   const cut = text.lastIndexOf("/");

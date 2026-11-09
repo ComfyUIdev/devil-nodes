@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 - 2026-11-09
+
+- Hugging Face downloads ask `huggingface_hub` for a token (`HF_TOKEN` or `hf auth login`). A gated or refused file tells you to set `HF_TOKEN` or run `hf auth login`, then restart ComfyUI.
+- Workflow Helper has a masked Civitai token field. The value stays in this browser and is not saved in the workflow. It is sent only to Civitai.
+
 ## 1.1.1 - 2026-11-09
 
 - Model downloads use the Python standard library. Hugging Face tokens still come from the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `HUGGINGFACE_HUB_TOKEN`) and, when `huggingface_hub` is installed, from `hf auth login`.

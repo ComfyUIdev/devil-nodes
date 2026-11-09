@@ -90,9 +90,11 @@ URLs can be:
 - a pasted `hf download hf://...` command
 - a `b2:` link, when `rclone` is on `PATH`
 
-A Hugging Face token in the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or `HUGGINGFACE_HUB_TOKEN`) is sent only to Hugging Face hosts. `CIVITAI_API_TOKEN` (or `CIVITAI_TOKEN`) is sent only to Civitai hosts. Tokens are not printed in the progress line. `b2:` downloads need rclone configured the same way you already use it.
+A Hugging Face token is read by `huggingface_hub` from `HF_TOKEN` or from `hf auth login`. It is sent only to Hugging Face hosts. If a gated file is refused, the card says to set `HF_TOKEN` or run `hf auth login`, then restart ComfyUI. When `huggingface_hub` is missing, public files still download: the `hf` CLI is used when it is on `PATH`, and otherwise the file is fetched over HTTPS.
 
-To use a gated Hugging Face model, set `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) so the ComfyUI process can see it, or run `hf auth login`, then restart ComfyUI. When `huggingface_hub` is installed it picks up that login itself. If the library is missing and `hf` or `huggingface-cli` is on `PATH`, the download uses that command. Otherwise the file is fetched over HTTPS.
+A Civitai token is typed into the masked field on Workflow Helper. It is stored in this browser only, not in the workflow, and it is sent only to Civitai hosts.
+
+Tokens are not printed in the progress line. `b2:` downloads need rclone configured the same way you already use it.
 
 The card JSON is stored on the node, so it comes back with the workflow, including copy, paste, and the API format.
 
