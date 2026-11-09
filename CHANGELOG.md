@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-11-09
 
 - Model downloads use the Python standard library. Hugging Face tokens still come from the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `HUGGINGFACE_HUB_TOKEN`) and, when `huggingface_hub` is installed, from `hf auth login`.
 
