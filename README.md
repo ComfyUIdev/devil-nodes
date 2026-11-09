@@ -4,9 +4,9 @@ ComfyUI nodes by [ComfyUIdev](https://github.com/ComfyUIdev).
 
 **Favorite** parks the graph on a spot you care about. Press its shortcut, or double-click the node, and the canvas pans and zooms so the node sits on a saved anchor. X and Y offsets nudge that spot. The move can cut, or ease in with a blur that clears when you arrive.
 
-**Workflow Helper** is a card you save inside the workflow. It carries a title, a Markdown how-to, the models to download, the custom node packs the graph needs, and the author's links. Open the workflow on another machine and each row is marked installed or missing. Download fetches that row's URL into the matching `models/` folder.
+**Workflow Helper** is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a graph: how to use it, which models to download, which custom node packs it needs, and your links. On another machine the card shows which models and packs are already there, which are missing, and downloads a missing model into the matching ComfyUI models folder. Card, banner, and info tile are three ways to show that one card.
 
-Favorite is frontend-only. It has no inputs, no outputs, and it does not run. Workflow Helper does not run either. Its download buttons talk to this ComfyUI in the background.
+Favorite is frontend-only. It has no inputs, no outputs, and it does not run. Workflow Helper's download buttons talk to this ComfyUI in the background.
 
 ![Devil Nodes](banner.png)
 
@@ -60,6 +60,8 @@ Widget values are saved on the node, so they come back with the workflow.
 Shortcuts are ignored while you are typing in a field. If the Favorite sits in a subgraph you are not viewing, the shortcut opens that subgraph first, then pans.
 
 ## Workflow Helper
+
+Workflow Helper is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a workflow: how to use the graph, which models to download, which custom node packs it needs, and your links. Someone who opens that workflow on another machine can see which models and packs they already have, which are missing, and download a missing model into the matching ComfyUI models folder. Card, banner, and info tile are ways to show that same card, not separate nodes.
 
 In the node menu, open **Devil Nodes** and add **Workflow Helper**.
 
