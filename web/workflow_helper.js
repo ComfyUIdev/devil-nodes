@@ -38,16 +38,16 @@ let defsPromise = null;
 let openEditor = null;
 
 const CSS = `
-.dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;}
+.dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;pointer-events:auto;}
 .dh-root *{box-sizing:border-box;}
-.dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;}
-/* Nodes 2.0 sizes the widget grid to its text. Force this node's grid to the
-   body under the title, and keep the card in that cell instead of a fixed
-   canvas overlay. Classic nodes are not .lg-node, so this stays off there. */
+.dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;pointer-events:auto;}
+.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn{pointer-events:auto;}
+/* Nodes 2.0: stretch the widget grid to the node body. Do not override
+   position or transform on the card — that overlay is what receives clicks. */
 .lg-node:has(.dh-root) [data-testid="node-widgets"]{flex:1 1 auto !important;width:100% !important;min-height:0 !important;align-self:stretch !important;grid-template-columns:minmax(0,1fr) !important;grid-template-rows:minmax(0,1fr) !important;}
 .lg-node:has(.dh-root) [data-widget-name="helper_panel"],
-.lg-node:has(.dh-root) [data-widget-name="helper_panel"] > *{width:100% !important;height:100% !important;min-width:0 !important;min-height:0 !important;align-self:stretch !important;}
-.lg-node .dh-root{position:relative !important;transform:none !important;left:auto !important;top:auto !important;inset:auto !important;width:100% !important;height:100% !important;min-width:100% !important;min-height:100% !important;max-width:none !important;max-height:none !important;flex:1 1 auto !important;align-self:stretch !important;}
+.lg-node:has(.dh-root) [data-widget-name="helper_panel"] > *{width:100% !important;height:100% !important;min-width:0 !important;min-height:100% !important;align-self:stretch !important;pointer-events:auto !important;}
+.lg-node .dh-root,.lg-node .dh-root *{pointer-events:auto !important;}
 .dh-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:0 0 10px;}
 .dh-head{position:relative;padding:12px 36px 10px 14px;border-left:4px solid #e25b45;}
 .dh-title{margin:0;color:#fff7f4;font-size:22px;font-weight:700;line-height:1.15;overflow-wrap:anywhere;}
@@ -613,30 +613,46 @@ function sectionTitle(text) {
   return heading;
 }
 
-function cssId(value) {
-  const text = String(value ?? "");
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(text);
-  return text.replace(/[^a-zA-Z0-9_-]/g, "");
-}
-
-function nodeChrome(root) {
-  return root?.closest?.("[data-node-id]") || root?.closest?.(".lg-node") || null;
+function vueNode(root) {
+  return root?.closest?.(".lg-node") || null;
 }
 
 function boxFor(state) {
   const node = state.node;
-  const top = Number.isFinite(state.dom?.y) && state.dom.y > 4 ? state.dom.y : 40;
-  return panelBox({
+  const title = globalThis.LiteGraph?.NODE_TITLE_HEIGHT;
+  const top = Number.isFinite(state.dom?.y) && state.dom.y > 4
+    ? state.dom.y
+    : (Number.isFinite(title) && title > 0 ? title : 30);
+  const raw = panelBox({
     nodeWidth: node.size?.[0],
     nodeHeight: node.size?.[1],
     top,
     contentMin: preferredHeight(state.card),
   });
+  // Widget frame: classic DOM widgets sit inside the node, not on its border.
+  return {
+    width: Math.max(200, raw.width - 20),
+    height: Math.max(72, raw.height - 8),
+  };
 }
 
-/** Nodes 2.0 draws the node as an element. Stretch its widget grid to that box. */
+function paintBox(el, width, height) {
+  if (!el || el === document.body || el === document.documentElement) return;
+  el.style.boxSizing = "border-box";
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
+  el.style.minWidth = `${width}px`;
+  el.style.minHeight = `${height}px`;
+  el.style.maxWidth = "none";
+  el.style.maxHeight = "none";
+}
+
+/**
+ * Nodes 2.0. Stretch the in-node grid to the body under the title.
+ * Leave position and transform alone: ComfyUI's overlay uses them for hits.
+ */
 function fillVueNode(root) {
-  const chrome = nodeChrome(root);
+  const chrome = vueNode(root);
   if (!chrome) return false;
   const style = getComputedStyle(chrome);
   let width = parseFloat(style.getPropertyValue("--node-width"));
@@ -646,8 +662,6 @@ function fillVueNode(root) {
     if (!(width > 40)) width = rect.width;
     if (!(height > 40)) height = rect.height;
   }
-  // --node-height already includes the title bar. Subtract a fixed header
-  // instead of measuring the body, which would grow with the card.
   const boxW = Math.max(200, Math.round(width - 12));
   const boxH = Math.max(72, Math.round(height - 44));
   const grid = chrome.querySelector("[data-testid='node-widgets']");
@@ -665,49 +679,53 @@ function fillVueNode(root) {
     grid.style.setProperty("flex", "1 1 auto", "important");
     grid.style.setProperty("min-height", "0", "important");
     grid.style.setProperty("align-self", "stretch", "important");
+    grid.style.setProperty("pointer-events", "auto", "important");
     grid.style.setProperty("grid-template-columns", "minmax(0, 1fr)", "important");
     grid.style.setProperty("grid-template-rows", rows.join(" "), "important");
   }
-  root.style.setProperty("position", "relative", "important");
-  root.style.setProperty("transform", "none", "important");
-  root.style.setProperty("left", "auto", "important");
-  root.style.setProperty("top", "auto", "important");
+  root.style.setProperty("pointer-events", "auto", "important");
   root.style.setProperty("width", "100%", "important");
-  root.style.setProperty("height", `${boxH}px`, "important");
+  root.style.setProperty("height", "100%", "important");
   root.style.setProperty("min-width", `${boxW}px`, "important");
   root.style.setProperty("min-height", `${boxH}px`, "important");
   root.style.setProperty("max-width", "none", "important");
   root.style.setProperty("flex", "1 1 auto", "important");
   root.style.setProperty("align-self", "stretch", "important");
+  const placed = getComputedStyle(root);
+  if (placed.position === "fixed" || placed.position === "absolute") {
+    root.style.setProperty("width", `${boxW}px`, "important");
+    root.style.setProperty("height", `${boxH}px`, "important");
+  }
   return true;
+}
+
+function fillClassic(state) {
+  const box = boxFor(state);
+  const root = state.root;
+  paintBox(root, box.width, box.height);
+  root.style.pointerEvents = "auto";
+  const parent = root.parentElement;
+  const host = parent && parent !== document.body && parent.childElementCount === 1 && parent.firstElementChild === root;
+  if (host && !parent.closest?.(".lg-node")) paintBox(parent, box.width, box.height);
 }
 
 function applyFill(state) {
   const root = state.root;
   if (!root) return;
   if (fillVueNode(root)) return;
-  root.style.display = "flex";
-  root.style.flexDirection = "column";
-  root.style.alignSelf = "stretch";
-  root.style.boxSizing = "border-box";
-  root.style.width = "100%";
-  root.style.height = "100%";
-  root.style.minWidth = "100%";
-  root.style.minHeight = "100%";
+  fillClassic(state);
 }
 
 function watchHost(state) {
-  const chrome = nodeChrome(state.root);
-  const id = cssId(state.node?.id);
-  const host = chrome || (id && document.querySelector(`[data-node-id="${id}"]`));
-  if (!host || state.observed === host) return;
+  const chrome = vueNode(state.root);
+  if (!chrome || state.observed === chrome) return;
   state.boxObserver?.disconnect();
   state.slotObserver?.disconnect();
   state.boxObserver = new ResizeObserver(() => applyFill(state));
-  state.boxObserver.observe(host);
+  state.boxObserver.observe(chrome);
   state.slotObserver = new MutationObserver(() => applyFill(state));
-  state.slotObserver.observe(host, { childList: true, subtree: true });
-  state.observed = host;
+  state.slotObserver.observe(chrome, { childList: true, subtree: false });
+  state.observed = chrome;
 }
 
 function scheduleFill(state) {
