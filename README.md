@@ -63,7 +63,9 @@ Shortcuts are ignored while you are typing in a field. If the Favorite sits in a
 
 In the node menu, open **Devil Nodes** and add **Workflow Helper**.
 
-The card is view-only until you click the pencil (or right-click the node and choose **Edit Workflow Helper**). The editor saves a title, a Markdown how-to, model rows, pack rows, and links. **Card** shows all of that on the node. **Banner** shows only the title, so the same node can label a stage or a column.
+The card is view-only until you click the pencil (or right-click the node and choose **Edit Workflow Helper**). The editor saves a title, a Markdown how-to, model rows, pack rows, and links. **Card** shows all of that on the node. **Banner** shows only the title, so the same node can label a stage or a column. **Info tile** is a compact button: an icon and the title. Click it to open the full card, including downloads.
+
+The how-to field accepts pipe tables and `[teal]`, `[green]`, `[amber]`, and `[glow]` tags with a matching closing tag. Fenced code shows those characters as typed.
 
 | Section | What it stores |
 | --- | --- |

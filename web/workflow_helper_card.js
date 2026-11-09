@@ -7,7 +7,7 @@
  */
 
 export const CARD_VERSION = 1;
-export const LAYOUTS = ["card", "banner"];
+export const LAYOUTS = ["card", "banner", "tile"];
 export const ROW_LIMIT = 40;
 export const BODY_LIMIT = 20000;
 
@@ -144,7 +144,7 @@ export function normalizeCard(raw) {
   const card = emptyCard();
   card.title = clip(source.title, 200).trim();
   card.body = clip(source.body ?? source.markdown, BODY_LIMIT);
-  card.layout = source.layout === "banner" ? "banner" : "card";
+  card.layout = LAYOUTS.includes(source.layout) ? source.layout : "card";
   card.models = takeRows(source.models, modelRow);
   card.packs = takeRows(source.packs, packRow);
   card.links = takeRows(source.links, linkRow);
@@ -164,6 +164,29 @@ export function cardHasContent(card) {
       card.packs?.length ||
       card.links?.length,
   );
+}
+
+/** A tile button only when that layout has something to open. */
+export function showsTile(card) {
+  return card?.layout === "tile" && cardHasContent(card);
+}
+
+/** Download arrow for a model list; a book for a how-to. */
+export function tileIsDownloadList(card) {
+  const title = String(card?.title || "").trim().toLowerCase();
+  const downloadTitle = new Set([
+    "download",
+    "downloads",
+    "model",
+    "models",
+    "download model",
+    "download models",
+    "model download",
+    "model downloads",
+  ]);
+  if (downloadTitle.has(title)) return true;
+  const body = String(card?.body || "").trim();
+  return Boolean(card?.models?.length) && !body && !card.packs?.length && !card.links?.length;
 }
 
 export function groupModels(models) {
@@ -436,6 +459,18 @@ export function parseInline(text) {
       }
     }
     if (src[i] === "[") {
+      const tone = /^(teal|green|amber|glow)\]/.exec(src.slice(i + 1));
+      if (tone) {
+        const name = tone[1];
+        const closer = `[/${name}]`;
+        const end = src.indexOf(closer, i + name.length + 2);
+        if (end > i && !src.slice(i + name.length + 2, end).includes("\n")) {
+          flush();
+          spans.push({ type: "tone", tone: name, text: src.slice(i + name.length + 2, end) });
+          i = end + closer.length - 1;
+          continue;
+        }
+      }
       const close = src.indexOf("](", i + 1);
       const end = close > i ? src.indexOf(")", close + 2) : -1;
       if (close > i + 1 && end > close + 2 && !src.slice(close + 2, end).includes("\n")) {
@@ -469,8 +504,24 @@ function splitCells(line) {
   let row = line.trim();
   if (!row.includes("|")) return [];
   if (row.startsWith("|")) row = row.slice(1);
-  if (row.endsWith("|")) row = row.slice(0, -1);
-  return row.split("|").map((cell) => cell.trim());
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  const cells = [];
+  let buf = "";
+  for (let i = 0; i < row.length; i += 1) {
+    if (row[i] === "\\" && row[i + 1] === "|") {
+      buf += "|";
+      i += 1;
+      continue;
+    }
+    if (row[i] === "|") {
+      cells.push(buf.trim());
+      buf = "";
+      continue;
+    }
+    buf += row[i];
+  }
+  cells.push(buf.trim());
+  return cells;
 }
 
 function isDivider(cells) {
@@ -586,6 +637,10 @@ function paintSpans(doc, parent, spans) {
       parent.append(element(doc, "em", span.text));
     } else if (span.type === "code") {
       parent.append(element(doc, "code", span.text));
+    } else if (span.type === "tone") {
+      const tone = element(doc, "span", span.text);
+      tone.className = `dh-tone-${span.tone}`;
+      parent.append(tone);
     } else if (span.type === "link") {
       const url = safeLink(span.url);
       if (!url) {

@@ -8,6 +8,7 @@
 - The model folder control is a dropdown of every built-in models folder plus any extra folders this ComfyUI reports. A saved folder that is not in that list stays selected.
 - The card fills the node body in the classic UI and in Nodes 2.0. Classic mode sizes the card in pixels from the node. Nodes 2.0 stretches the widget grid and keeps the overlay positioning, and the pencil is hit-tested from the screen so Edit and downloads still receive clicks.
 - Scan workflow suggests model files selected by loaders in this graph that are not already on the card. Choose which rows to add. The file name and folder are filled in. The URL stays empty until you add one.
+- Info tile layout shows a compact button. Clicking it opens the full card, including downloads. The how-to field styles `[teal]`, `[green]`, `[amber]`, and `[glow]` tags and pipe tables.
 
 ## 1.0.1 - 2026-11-08
 

@@ -26,6 +26,8 @@ import {
   packsFromNodes,
   safeLink,
   serializeCard,
+  showsTile,
+  tileIsDownloadList,
 } from "./workflow_helper_card.js";
 
 const NODE_TYPE = "WorkflowHelper";
@@ -41,7 +43,20 @@ const CSS = `
 .dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;pointer-events:auto;}
 .dh-root *{box-sizing:border-box;}
 .dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;pointer-events:auto;}
-.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn{pointer-events:auto;}
+.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn,.dh-tile-open{pointer-events:auto;}
+.dh-tone-teal{color:#3dccc7;}
+.dh-tone-green{color:#7dcea0;}
+.dh-tone-amber{color:#f0b429;}
+.dh-tone-glow{color:#ffe7c2;text-shadow:0 0 6px rgba(226,91,69,.9),0 0 14px rgba(226,91,69,.45);}
+.dh-mdtools{display:flex;flex-wrap:wrap;gap:4px;}
+.dh-mdtools button{height:24px;padding:0 8px;border:1px solid #6a403c;border-radius:4px;background:#2a1c1a;color:#fff7f4;font:12px system-ui,sans-serif;cursor:pointer;}
+.dh-mdtools button:hover{border-color:#e25b45;}
+.dh-tile{position:relative;display:flex;align-items:center;min-height:52px;}
+.dh-tile-open{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:8px 44px 8px 14px;border:0;background:transparent;color:#fff7f4;text-align:left;font:600 16px/1.3 system-ui,sans-serif;cursor:pointer;}
+.dh-tile-open:hover{background:rgba(255,255,255,.04);}
+.dh-tile-icon{width:22px;height:22px;flex:none;color:#e25b45;}
+.dh-tile .dh-edit{top:50%;right:10px;transform:translateY(-50%);}
+.dh-reader{width:min(720px,94vw);}
 /* Nodes 2.0: stretch the widget grid to the node body. Do not override
    position or transform on the card — that overlay is what receives clicks. */
 .lg-node:has(.dh-root) [data-testid="node-widgets"]{flex:1 1 auto !important;width:100% !important;min-height:0 !important;align-self:stretch !important;grid-template-columns:minmax(0,1fr) !important;grid-template-rows:minmax(0,1fr) !important;}
@@ -184,6 +199,13 @@ function onHelperPointerUp(event) {
       event.preventDefault();
       event.stopPropagation();
       if (!recent(state, "edit")) openCardEditor(state);
+      return;
+    }
+    const opener = state.root.querySelector(".dh-tile-open");
+    if (opener && pointIn(event, opener)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!recent(state, "read")) openReader(state);
       return;
     }
     for (const button of state.root.querySelectorAll(".dh-dl")) {
@@ -702,6 +724,8 @@ function vueNode(root) {
 
 function boxFor(state) {
   const node = state.node;
+  const width = Math.max(220, (node.size?.[0] || 320) - 20);
+  if (showsTile(state.card)) return { width, height: 56 };
   const title = globalThis.LiteGraph?.NODE_TITLE_HEIGHT;
   const top = Number.isFinite(state.dom?.y) && state.dom.y > 4
     ? state.dom.y
@@ -745,8 +769,9 @@ function fillVueNode(root) {
     if (!(width > 40)) width = rect.width;
     if (!(height > 40)) height = rect.height;
   }
+  const tileFace = root.dataset.face === "tile";
   const boxW = Math.max(200, Math.round(width - 12));
-  const boxH = Math.max(72, Math.round(height - 44));
+  const boxH = tileFace ? 52 : Math.max(72, Math.round(height - 44));
   const grid = chrome.querySelector("[data-testid='node-widgets']");
   if (grid) {
     const names = [];
@@ -754,9 +779,10 @@ function fillVueNode(root) {
       const name = row.getAttribute("data-widget-name");
       if (name && !names.includes(name)) names.push(name);
     });
-    const rows = (names.length ? names : ["helper_panel"]).map((name) =>
-      name === "helper_panel" ? "minmax(0, 1fr)" : "min-content",
-    );
+    const rows = (names.length ? names : ["helper_panel"]).map((name) => {
+      if (name !== "helper_panel") return "min-content";
+      return tileFace ? "52px" : "minmax(0, 1fr)";
+    });
     grid.style.setProperty("display", "grid", "important");
     grid.style.setProperty("width", "100%", "important");
     grid.style.setProperty("flex", "1 1 auto", "important");
@@ -803,6 +829,10 @@ function fillClassic(state) {
 function applyFill(state) {
   const root = state.root;
   if (!root) return;
+  if (showsTile(state.card)) {
+    const width = Math.max(state.node.size?.[0] || 0, 300);
+    if ((state.node.size?.[1] || 0) > 150) state.node.setSize?.([width, 108]);
+  }
   if (fillVueNode(root)) return;
   fillClassic(state);
 }
@@ -827,53 +857,34 @@ function scheduleFill(state) {
   });
 }
 
-function renderCard(state) {
+function tileIcon(download) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("dh-tile-icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.8");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", download
+    ? "M12 4v10M8 10l4 4 4-4M5 19h14"
+    : "M5 4h6a2 2 0 0 1 2 2v13H7a2 2 0 0 0-2 2V4zM13 4h6v15h-8");
+  svg.append(path);
+  return svg;
+}
+
+function appendCardSections(state, parent) {
   const card = state.card;
-  const root = state.root;
-  state.packHost = null;
-  root.classList.toggle("dh-banner", card.layout === "banner");
-  const scroll = state.scroll;
-  scroll.textContent = "";
-  state.views = new Map();
-
-  const head = el("div", "dh-head");
-  head.append(el("h1", "dh-title", card.title || "Untitled workflow"));
-  const edit = el("button", "dh-edit", "✎");
-  edit.type = "button";
-  edit.title = "Edit Workflow Helper";
-  stopDrag(edit);
-  const openEdit = (event) => {
-    if (event.button != null && event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (recent(state, "edit")) return;
-    openCardEditor(state);
-  };
-  edit.addEventListener("pointerup", openEdit);
-  edit.addEventListener("click", openEdit);
-  head.append(edit);
-  scroll.append(head);
-
-  if (card.layout === "banner") {
-    scheduleFill(state);
-    return;
-  }
-
-  if (!cardHasContent(card)) {
-    scroll.append(el("div", "dh-empty", "Click the pencil to add a title, a how-to, the models to download, the packs this workflow needs, and your links."));
-    scheduleFill(state);
-    return;
-  }
-
   if (card.body.trim()) {
     const section = el("div", "dh-section");
     const body = el("div", "dh-body");
     stopDrag(body);
     mountMarkdown(document, body, card.body);
     section.append(body);
-    scroll.append(section);
+    parent.append(section);
   }
-
   if (card.models.length) {
     const section = el("div", "dh-section");
     const heading = sectionTitle("Models");
@@ -888,16 +899,14 @@ function renderCard(state) {
       section.append(el("div", "dh-folder", folderLabel(group.folder)));
       for (const row of group.rows) section.append(modelRowView(state, row));
     }
-    scroll.append(section);
+    parent.append(section);
   }
-
   if (card.packs.length) {
     const section = el("div", "dh-section");
     section.append(sectionTitle("Node packs"));
     state.packHost = section;
-    scroll.append(section);
+    parent.append(section);
   }
-
   if (card.links.length) {
     const section = el("div", "dh-section");
     section.append(sectionTitle("Links"));
@@ -907,10 +916,119 @@ function renderCard(state) {
       else chips.append(el("span", "dh-chip", link.label));
     }
     section.append(chips);
-    scroll.append(section);
+    parent.append(section);
+  }
+  state.recheck(false);
+}
+
+function openReader(state) {
+  if (!state || !showsTile(state.card)) return;
+  if (recent(state, "read-open")) return;
+  const overlay = el("div", "dh-overlay");
+  const dialog = el("div", "dh-dialog dh-reader");
+  const head = el("div", "dh-dhead");
+  const closeBtn = el("button", "dh-btn", "Close");
+  closeBtn.type = "button";
+  const editBtn = el("button", "dh-btn", "Edit");
+  editBtn.type = "button";
+  head.append(el("span", "", state.card.title || "Workflow info"), el("span", "spacer"), editBtn, closeBtn);
+  const body = el("div", "dh-dbody");
+  dialog.append(head, body);
+  overlay.append(dialog);
+  stopDrag(overlay);
+  const close = () => {
+    overlay.remove();
+    state.reader = null;
+    renderCard(state);
+  };
+  closeBtn.addEventListener("click", close);
+  editBtn.addEventListener("click", () => {
+    overlay.remove();
+    state.reader = null;
+    openCardEditor(state);
+  });
+  overlay.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+    if (event.target === overlay) close();
+  });
+  overlay.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Escape") close();
+  });
+  state.views = new Map();
+  state.packHost = null;
+  appendCardSections(state, body);
+  document.body.append(overlay);
+  state.reader = overlay;
+  closeBtn.focus();
+}
+
+function makePencil(state) {
+  const edit = el("button", "dh-edit", "✎");
+  edit.type = "button";
+  edit.title = "Edit Workflow Helper";
+  stopDrag(edit);
+  const openEdit = (event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (recent(state, "edit")) return;
+    openCardEditor(state);
+  };
+  edit.addEventListener("pointerup", openEdit);
+  edit.addEventListener("click", openEdit);
+  return edit;
+}
+
+function renderCard(state) {
+  const card = state.card;
+  const root = state.root;
+  state.packHost = null;
+  const tiled = showsTile(card);
+  root.dataset.face = tiled ? "tile" : (card.layout === "banner" ? "banner" : "card");
+  root.classList.toggle("dh-banner", card.layout === "banner");
+  root.classList.toggle("dh-tile", tiled);
+  const scroll = state.scroll;
+  scroll.textContent = "";
+  state.views = new Map();
+
+  if (tiled) {
+    const bar = el("div", "dh-tile");
+    const open = el("button", "dh-tile-open");
+    open.type = "button";
+    open.append(tileIcon(tileIsDownloadList(card)), el("span", "", card.title || "Workflow info"));
+    const openRead = (event) => {
+      if (event.button != null && event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openReader(state);
+    };
+    open.addEventListener("pointerup", openRead);
+    open.addEventListener("click", openRead);
+    bar.append(open, makePencil(state));
+    scroll.append(bar);
+    const width = Math.max(state.node.size?.[0] || 0, 300);
+    if ((state.node.size?.[1] || 0) > 150) state.node.setSize?.([width, 108]);
+    scheduleFill(state);
+    return;
   }
 
-  state.recheck(false);
+  const head = el("div", "dh-head");
+  head.append(el("h1", "dh-title", card.title || "Untitled workflow"), makePencil(state));
+  scroll.append(head);
+
+  if (card.layout === "banner") {
+    scheduleFill(state);
+    return;
+  }
+
+  if (!cardHasContent(card)) {
+    scroll.append(el("div", "dh-empty", "Click the pencil to add a title, a how-to, the models to download, the packs this workflow needs, and your links."));
+    scheduleFill(state);
+    return;
+  }
+
+  appendCardSections(state, scroll);
   scheduleFill(state);
 }
 
@@ -1040,13 +1158,14 @@ async function openCardEditor(state, draftCard) {
   form.style.flexDirection = "column";
   form.style.gap = "12px";
   const title = textInput(draft.title, "Portrait upscale");
+  const layoutChoices = [["card", "Card"], ["banner", "Banner"], ["tile", "Info tile"]];
   const seg = el("div", "dh-seg");
-  const segButtons = ["card", "banner"].map((option) => {
-    const button = el("button", option === layout ? "on" : "", option === "banner" ? "Banner" : "Card");
+  const segButtons = layoutChoices.map(([option, label]) => {
+    const button = el("button", option === layout ? "on" : "", label);
     button.type = "button";
     button.addEventListener("click", () => {
       layout = option;
-      segButtons.forEach((other, index) => other.classList.toggle("on", ["card", "banner"][index] === option));
+      segButtons.forEach((other, index) => other.classList.toggle("on", layoutChoices[index][0] === option));
     });
     seg.append(button);
     return button;
@@ -1054,14 +1173,39 @@ async function openCardEditor(state, draftCard) {
   const grid = el("div", "dh-grid");
   grid.append(
     field("Title", title),
-    field("Layout", seg, "Banner is only the title, as a label on the graph."),
+    field("Layout", seg, "Banner is only the title, as a label on the graph. Info tile opens the full card when clicked."),
   );
   form.append(grid);
 
   const howTo = el("textarea");
   howTo.value = draft.body;
   howTo.placeholder = "## How to run\n\n1. Download the models\n2. Queue the prompt\n\n**Bold**, *italic*, `code`, and [a link](https://example.com).";
-  form.append(field("How-to (Markdown)", howTo, "Headings, lists, links, and fenced code. Only http(s) links are clickable."));
+  const formatTools = el("div", "dh-mdtools");
+  for (const label of ["Teal", "Green", "Amber", "Glow", "Table"]) {
+    const button = el("button", "", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      const start = howTo.selectionStart ?? 0;
+      const end = howTo.selectionEnd ?? start;
+      const value = howTo.value;
+      if (label === "Table") {
+        const gap = start > 0 && !value.slice(0, start).endsWith("\n\n") ? "\n\n" : "";
+        const table = "| Setting | Value |\n| --- | --- |\n| Name | Value |\n";
+        howTo.setRangeText(`${gap}${table}`, start, start, "end");
+      } else {
+        const tone = label.toLowerCase();
+        const selection = value.slice(start, end) || "text";
+        const styled = selection.split("\n").map((line) => (line ? `[${tone}]${line}[/${tone}]` : "")).join("\n");
+        howTo.setRangeText(styled, start, end, "end");
+      }
+      howTo.focus();
+      howTo.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    formatTools.append(button);
+  }
+  const howToField = field("How-to (Markdown)", howTo, "Use pipe tables and [teal]text[/teal], [green], [amber], or [glow] with a matching closing tag.");
+  howToField.insertBefore(formatTools, howTo);
+  form.append(howToField);
   const preview = el("details", "dh-preview");
   const sample = el("div", "dh-body");
   preview.append(el("summary", "", "Preview"), sample);
@@ -1225,13 +1369,14 @@ async function openCardEditor(state, draftCard) {
     } else {
       next = readForm();
     }
-    const wasBanner = state.card.layout === "banner";
+    const previousLayout = state.card.layout;
     state.card = next;
     writeCard(state.node, next);
     closeEditor();
     renderCard(state);
-    if (next.layout === "banner" && !wasBanner) state.node.setSize?.([state.node.size[0], 110]);
-    if (next.layout !== "banner" && wasBanner) state.node.setSize?.([Math.max(state.node.size[0], 480), 420]);
+    if (next.layout === "banner" && previousLayout !== "banner") state.node.setSize?.([state.node.size[0], 110]);
+    if (next.layout === "tile" && showsTile(next)) state.node.setSize?.([Math.max(state.node.size[0], 300), 108]);
+    if (next.layout === "card" && previousLayout !== "card") state.node.setSize?.([Math.max(state.node.size[0], 480), 420]);
     state.node.setDirtyCanvas?.(true, true);
   };
 
@@ -1286,6 +1431,7 @@ async function openCardEditor(state, draftCard) {
 }
 
 function preferredHeight(card) {
+  if (showsTile(card)) return 64;
   if (!card || card.layout === "banner") return 84;
   let height = 110;
   if (String(card.body || "").trim()) height += 140;
