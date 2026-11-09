@@ -1,10 +1,12 @@
 # Devil Nodes
 
-Canvas bookmarks for ComfyUI, by [ComfyUIdev](https://github.com/ComfyUIdev).
+ComfyUI nodes by [ComfyUIdev](https://github.com/ComfyUIdev).
 
 **Favorite** parks the graph on a spot you care about. Press its shortcut, or double-click the node, and the canvas pans and zooms so the node sits on a saved anchor. X and Y offsets nudge that spot. The move can cut, or ease in with a blur that clears when you arrive.
 
-Favorite is frontend-only. It has no inputs, no outputs, and it does not run.
+**Workflow Helper** is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a graph: how to use it, which models to download, which custom node packs it needs, and your links. On another machine the card shows which models and packs are already there, which are missing, and downloads a missing model into the matching ComfyUI models folder. Card, banner, and info tile are three ways to show that one card.
+
+Favorite is frontend-only. It has no inputs, no outputs, and it does not run. Workflow Helper's download buttons talk to this ComfyUI in the background.
 
 ![Devil Nodes](banner.png)
 
@@ -57,17 +59,55 @@ Widget values are saved on the node, so they come back with the workflow.
 
 Shortcuts are ignored while you are typing in a field. If the Favorite sits in a subgraph you are not viewing, the shortcut opens that subgraph first, then pans.
 
+## Workflow Helper
+
+Workflow Helper is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a workflow: how to use the graph, which models to download, which custom node packs it needs, and your links. Someone who opens that workflow on another machine can see which models and packs they already have, which are missing, and download a missing model into the matching ComfyUI models folder. Card, banner, and info tile are ways to show that same card, not separate nodes.
+
+In the node menu, open **Devil Nodes** and add **Workflow Helper**.
+
+The card is view-only until you click the pencil (or right-click the node and choose **Edit Workflow Helper**). The editor saves a title, a Markdown how-to, model rows, pack rows, and links. **Card** shows all of that on the node. **Banner** shows only the title, so the same node can label a stage or a column. **Info tile** is a compact button: an icon and the title. Click it to open the full card, including downloads.
+
+The how-to field accepts pipe tables and `[teal]`, `[green]`, `[amber]`, and `[glow]` tags with a matching closing tag. Fenced code shows those characters as typed.
+
+| Section | What it stores |
+| --- | --- |
+| Title | The large heading. In the banner layout this is the whole card. |
+| How-to | Markdown: headings, lists, bold, italic, code, tables, and `http(s)` links. |
+| Models | File name, model folder (`checkpoints`, `loras`, `vae`, and the rest of this install), optional size and note, and a download URL. |
+| Node packs | Pack name, link, and one node class from that pack. If the class is registered here, the row is installed. |
+| Links | Label and `http(s)` URL for the author's pages. |
+
+Model rows are grouped under `models/<folder>`. A dot marks each row: found, missing, or not checked (no folder, or this install has no such folder). **Check again** looks up ComfyUI's model list. Pack rows use the same installed / missing marks against the node classes this ComfyUI has loaded.
+
+**Scan workflow**, in the editor or on the node's right-click menu, reads the loaders in this graph. It lists checkpoint, LoRA, VAE, diffusion, text encoder, ControlNet, embedding, upscale, and similar files that are not already on the card. Tick the ones you want and add them. The file name and folder are filled in. The download URL stays empty when the graph only has a local file name.
+
+**Download** sends the row's URL, file name, and folder to this ComfyUI process. The file is written only inside a model directory ComfyUI already knows. Paths that would leave that directory are rejected. The button shows progress, then **Installed**, or the error and **Retry**.
+
+URLs can be:
+
+- a direct `http` or `https` link, including Civitai download links
+- a Hugging Face file URL, or `hf://org/repo/file.safetensors`
+- a pasted `hf download hf://...` command
+- a `b2:` link, when `rclone` is on `PATH`
+
+A Hugging Face token in the ComfyUI process (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or `HUGGINGFACE_HUB_TOKEN`) is sent only to Hugging Face hosts. `CIVITAI_API_TOKEN` (or `CIVITAI_TOKEN`) is sent only to Civitai hosts. Tokens are not printed in the progress line. `b2:` downloads need rclone configured the same way you already use it.
+
+To use a gated Hugging Face model, set `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) so the ComfyUI process can see it, or run `hf auth login`, then restart ComfyUI. When `huggingface_hub` is installed it picks up that login itself. If the library is missing and `hf` or `huggingface-cli` is on `PATH`, the download uses that command. Otherwise the file is fetched over HTTPS.
+
+The card JSON is stored on the node, so it comes back with the workflow, including copy, paste, and the API format.
+
 ## Requirements
 
 - ComfyUI
 - Python 3.8 or newer
-- No third-party Python dependencies
+- No extra Python packages. Workflow Helper uses `aiohttp`, which ComfyUI already provides. Hugging Face downloads use `huggingface_hub` when it is installed. If it is not, and `hf` or `huggingface-cli` is on `PATH`, that command is used. Otherwise the file is fetched over HTTPS. `b2:` links need `rclone` on `PATH`.
 
 ## Nodes in this pack
 
 | Node | Runs on | What it does |
 | --- | --- | --- |
 | Favorite | The browser only | Pans and zooms to a saved canvas anchor |
+| Workflow Helper | The browser, plus download routes on this ComfyUI | Shareable card: title, how-to, model downloads, pack checks, links |
 
 More nodes can be added under `py/` without changing how Favorite is loaded. See the layout below.
 
@@ -75,10 +115,14 @@ More nodes can be added under `py/` without changing how Favorite is loaded. See
 
 ```text
 devil-nodes/
-  __init__.py          pack entry: merges node mappings, serves web/
-  py/favorite.py       Favorite's slot (no backend execution)
-  web/favorite.js      the node
+  __init__.py                 pack entry: merges node mappings, serves web/
+  py/favorite.py              Favorite's slot (no backend execution)
+  py/workflow_helper.py       Workflow Helper node (card JSON, no prompt)
+  py/helper_download.py       download routes into known model folders
+  web/favorite.js             Favorite
   web/favorite_anchor.js
+  web/workflow_helper.js      Workflow Helper card
+  web/workflow_helper_card.js card JSON, Markdown, installed-file match
   pyproject.toml
   icon.png
   banner.png
