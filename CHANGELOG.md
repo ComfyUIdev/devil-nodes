@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3 - 2026-11-11
+
+- Favorite and Workflow Helper are listed under **Devil Nodes/Utility** in the node menu.
+
 ## 1.1.2 - 2026-11-09
 
 - Hugging Face downloads ask `huggingface_hub` for a token (`HF_TOKEN` or `hf auth login`). A gated or refused file tells you to set `HF_TOKEN` or run `hf auth login`, then restart ComfyUI.
