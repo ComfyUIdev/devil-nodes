@@ -35,7 +35,7 @@ The folder name ComfyUI loads is `devil-nodes`. No extra Python packages are req
 
 ## Favorite
 
-In the node menu, open **Devil Nodes** and add **Favorite**.
+In the node menu, open **Devil Nodes/Utility** and add **Favorite**.
 
 | Widget | What it does |
 | --- | --- |
@@ -63,7 +63,7 @@ Shortcuts are ignored while you are typing in a field. If the Favorite sits in a
 
 Workflow Helper is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a workflow: how to use the graph, which models to download, which custom node packs it needs, and your links. Someone who opens that workflow on another machine can see which models and packs they already have, which are missing, and download a missing model into the matching ComfyUI models folder. Card, banner, and info tile are ways to show that same card, not separate nodes.
 
-In the node menu, open **Devil Nodes** and add **Workflow Helper**.
+In the node menu, open **Devil Nodes/Utility** and add **Workflow Helper**.
 
 The card is view-only until you click the pencil (or right-click the node and choose **Edit Workflow Helper**). The editor saves a title, a Markdown how-to, model rows, pack rows, and links. **Card** shows all of that on the node. **Banner** shows only the title, so the same node can label a stage or a column. **Info tile** is a compact button: an icon and the title. Click it to open the full card, including downloads.
 

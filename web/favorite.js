@@ -393,7 +393,7 @@ class Favorite extends LGraphNode {
 }
 
 Favorite.title = "Favorite";
-Favorite.category = "Devil Nodes";
+Favorite.category = "Devil Nodes/Utility";
 Favorite.description = "Jump to this canvas anchor with pan, zoom, offsets, and optional animation and blur.";
 keyEvents = new KeyEventService();
 
@@ -401,7 +401,7 @@ app.registerExtension({
   name: "devil-nodes.Favorite",
   registerCustomNodes() {
     LiteGraph.registerNodeType(NODE_TYPE, Favorite);
-    Favorite.category = "Devil Nodes";
+    Favorite.category = "Devil Nodes/Utility";
   },
 });
 

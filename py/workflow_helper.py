@@ -13,7 +13,7 @@ from __future__ import annotations
 
 
 class WorkflowHelper:
-    CATEGORY = "Devil Nodes"
+    CATEGORY = "Devil Nodes/Utility"
     DESCRIPTION = (
         "A workflow card for sharing: a big title, a Markdown how-to, the "
         "models the workflow needs, the custom node packs it depends on, "
