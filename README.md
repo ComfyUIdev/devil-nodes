@@ -69,10 +69,21 @@ The card is view-only until you click the pencil (or right-click the node and ch
 
 The how-to field accepts pipe tables and `[teal]`, `[green]`, `[amber]`, and `[glow]` tags with a matching closing tag. Fenced code shows those characters as typed.
 
+Colored link buttons use one line. Put several on the same line and they sit side by side and wrap:
+
+```text
+[[button: Watch the walkthrough | https://example.com/watch | #e25b45 | readmore]]
+[[button: Get the model | https://example.com/model.safetensors | #e25b45 | download | 1.2 GB]]
+```
+
+The parts are the label, an `http` or `https` URL, an optional color, an optional style, and an optional size. Styles are `link`, `download`, `readmore`, and `plain`. A missing color uses the Devil Nodes red. A color has to be hex (`#rgb`, `#rrggbb`) or `rgb()` / `rgba()`. Anything else is ignored and the red is used. Any other URL scheme stays as text and is not a link. The pill opens in a new tab. **Button** in the how-to toolbar asks for the label, URL, color, and style, then inserts the line. A size is kept for a download button.
+
+A pasted Pixaroma note button (`span.pix-note-btnblock` with `pix-note-dl`, `pix-note-vp`, `pix-note-rm`, or `pix-note-btn-plain`) is shown as one of these pills. The label, URL, color, and style are read out of that snippet. The HTML is not rendered. A size badge (`pix-note-btnsize`) is kept on a download.
+
 | Section | What it stores |
 | --- | --- |
 | Title | The large heading. In the banner layout this is the whole card. |
-| How-to | Markdown: headings, lists, bold, italic, code, tables, and `http(s)` links. |
+| How-to | Markdown: headings, lists, bold, italic, code, tables, `http(s)` links, and colored `[[button: …]]` pills. |
 | Models | File name, model folder (`checkpoints`, `loras`, `vae`, and the rest of this install), optional size and note, and a download URL. |
 | Node packs | Pack name, link, and one node class from that pack. If the class is registered here, the row is installed. |
 | Links | Label and `http(s)` URL for the author's pages. |

@@ -9,10 +9,13 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import {
+  DEFAULT_BUTTON_COLOR,
   MODEL_FOLDERS,
   ROW_LIMIT,
+  buttonColor,
   cardHasContent,
   folderChoices,
+  formatButton,
   folderLabel,
   groupModels,
   panelBox,
@@ -51,7 +54,7 @@ const CSS = `
 .dh-root{box-sizing:border-box;display:flex;flex-direction:column;align-self:stretch;justify-self:stretch;flex:1 1 auto;width:100%;height:100%;min-width:100%;min-height:100%;margin:0;padding:0;color:#f3ebe7;font:12px/1.45 system-ui,sans-serif;pointer-events:auto;}
 .dh-root *{box-sizing:border-box;}
 .dh-card{display:flex;flex-direction:column;flex:1 1 auto;width:100%;height:100%;min-height:100%;overflow:hidden;border:1px solid #5a3330;border-radius:6px;background:#1c1412;pointer-events:auto;}
-.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn,.dh-tile-open,.dh-token{pointer-events:auto;}
+.dh-edit,.dh-dl,.dh-link,.dh-mini,.dh-name,.dh-btn,.dh-tile-open,.dh-token,.devil-btn{pointer-events:auto;}
 .dh-tone-teal{color:#3dccc7;}
 .dh-tone-green{color:#7dcea0;}
 .dh-tone-amber{color:#f0b429;}
@@ -95,6 +98,20 @@ const CSS = `
 .dh-body code{padding:0 4px;border-radius:3px;background:rgba(255,255,255,.08);font:11px ui-monospace,monospace;}
 .dh-body pre{margin:0 0 8px;padding:8px;overflow:auto;border-radius:6px;background:#120c0b;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;}
 .dh-body a{color:#ffb1a3;pointer-events:auto;}
+.dh-body .devil-btnrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 8px;}
+.dh-body a.devil-btn{display:inline-flex;align-items:center;gap:6px;max-width:100%;margin:2px 8px 2px 0;padding:5px 12px;border:1px solid rgba(0,0,0,.35);border-radius:999px;background:var(--devil-btn-bg,#e25b45);color:var(--devil-btn-fg,#2a100d);box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);font-size:12px;font-weight:700;line-height:1.2;text-decoration:none;vertical-align:middle;cursor:pointer;overflow-wrap:anywhere;}
+.dh-body .devil-btnrow a.devil-btn{margin:0;}
+.dh-body a.devil-btn:hover{filter:brightness(1.06);box-shadow:0 0 0 1px #dff25a,0 0 12px rgba(223,242,90,.42);text-decoration:none;}
+.dh-body a.devil-btn-plain{background:transparent;color:var(--devil-btn-fg,#e25b45);border-color:var(--devil-btn-fg,#e25b45);box-shadow:none;}
+.dh-body a.devil-btn-plain:hover{background:var(--devil-btn-bg,#e25b45);color:var(--devil-btn-hover-fg,#2a100d);filter:none;box-shadow:0 0 0 1px #dff25a,0 0 12px rgba(223,242,90,.42);}
+.dh-body .devil-btnicon{width:12px;height:12px;flex:none;}
+.dh-body .devil-btnsize{display:inline-flex;align-items:center;padding:0 6px;border:1px solid currentColor;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.02em;white-space:nowrap;}
+.dh-body .devil-btnsize::before{content:"";width:3px;height:3px;margin-right:5px;border-radius:50%;background:currentColor;}
+.dh-btnask{z-index:200010;}
+.dh-btnask .dh-dialog{width:min(440px,94vw);}
+.dh-colorline{display:flex;gap:6px;align-items:center;}
+.dh-colorline input[type="color"]{width:36px;height:26px;padding:2px;border:1px solid #6a403c;border-radius:5px;background:#2a1c1a;cursor:pointer;flex:none;}
+.dh-colorline input[type="text"]{flex:1 1 auto;}
 .dh-body table{width:100%;margin:0 0 8px;border-collapse:collapse;}
 .dh-body th,.dh-body td{padding:4px 6px;border-top:1px solid #5a3330;text-align:left;vertical-align:top;overflow-wrap:anywhere;}
 .dh-body th{color:#fff7f4;}
@@ -225,6 +242,15 @@ function onHelperPointerUp(event) {
         event.preventDefault();
         event.stopPropagation();
         button.click();
+      }
+      return;
+    }
+    for (const link of state.root.querySelectorAll("a.devil-btn")) {
+      if (!pointIn(event, link)) continue;
+      if (!link.contains(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        link.click();
       }
       return;
     }
@@ -1202,6 +1228,141 @@ function dropTokenFromSerialized(info) {
   }
 }
 
+function pickerHex(value) {
+  const color = buttonColor(value);
+  if (!color.startsWith("#")) return "";
+  const hex = color.slice(1);
+  if (hex.length === 3 || hex.length === 4) {
+    return `#${hex.slice(0, 3).split("").map((part) => part + part).join("")}`;
+  }
+  if (hex.length >= 6) return `#${hex.slice(0, 6)}`;
+  return "";
+}
+
+function openButtonAsk(textarea) {
+  ensureCss();
+  const overlay = el("div", "dh-overlay dh-btnask");
+  const dialog = el("div", "dh-dialog");
+  const head = el("div", "dh-dhead");
+  head.append(el("span", "", "Add button"), el("span", "spacer"));
+  const body = el("div", "dh-dbody");
+  const label = textInput("", "Watch the walkthrough");
+  const url = textInput("", "https://example.com");
+  const colorRow = el("div", "dh-colorline");
+  const colorPick = el("input");
+  colorPick.type = "color";
+  colorPick.value = DEFAULT_BUTTON_COLOR;
+  const colorText = textInput(DEFAULT_BUTTON_COLOR, "#e25b45 or rgb(226, 91, 69)");
+  colorRow.append(colorPick, colorText);
+  const style = el("select");
+  for (const [value, name] of [
+    ["link", "Link"],
+    ["download", "Download"],
+    ["readmore", "Read more"],
+    ["plain", "Plain"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = name;
+    style.append(option);
+  }
+  const size = textInput("", "1.2 GB");
+  const preview = el("div", "dh-body");
+  const error = el("span", "dh-error");
+  body.append(
+    field("Label", label),
+    field("URL", url, "http or https only. The button opens in a new tab."),
+    field("Color", colorRow, "Hex or rgb(). Clear it to use the Devil Nodes red."),
+    field("Style", style),
+    field("Size", size, "Optional. A download button can show this beside the label."),
+    preview,
+  );
+  const foot = el("div", "dh-dfoot");
+  const cancel = el("button", "dh-btn", "Cancel");
+  cancel.type = "button";
+  const insert = el("button", "dh-btn primary", "Insert");
+  insert.type = "button";
+  foot.append(error, el("span", "spacer"), cancel, insert);
+  dialog.append(head, body, foot);
+  overlay.append(dialog);
+  stopDrag(overlay);
+
+  const refresh = () => {
+    preview.textContent = "";
+    const rawColor = colorText.value.trim();
+    if (rawColor && !buttonColor(rawColor)) error.textContent = "Color needs to be hex or rgb().";
+    else error.textContent = "";
+    const syntax = formatButton({
+      label: label.value,
+      url: url.value,
+      color: buttonColor(rawColor) || DEFAULT_BUTTON_COLOR,
+      style: style.value,
+      size: style.value === "download" ? size.value : "",
+    });
+    if (!syntax) {
+      preview.append(el("p", "dh-hint", "Add a label and an http or https link."));
+      return;
+    }
+    mountMarkdown(document, preview, syntax);
+  };
+  colorPick.addEventListener("input", () => {
+    colorText.value = colorPick.value;
+    refresh();
+  });
+  colorText.addEventListener("input", () => {
+    const hex = pickerHex(colorText.value);
+    if (hex) colorPick.value = hex;
+    refresh();
+  });
+  for (const input of [label, url, style, size]) {
+    input.addEventListener("input", refresh);
+    input.addEventListener("change", refresh);
+  }
+  const close = () => overlay.remove();
+  cancel.addEventListener("click", close);
+  overlay.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+    if (event.target === overlay) close();
+  });
+  overlay.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Escape") close();
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      insert.click();
+    }
+  });
+  insert.addEventListener("click", () => {
+    const rawColor = colorText.value.trim();
+    if (rawColor && !buttonColor(rawColor)) {
+      error.textContent = "Color needs to be hex or rgb().";
+      return;
+    }
+    const syntax = formatButton({
+      label: label.value,
+      url: url.value,
+      color: rawColor ? buttonColor(rawColor) : "",
+      style: style.value,
+      size: style.value === "download" ? size.value : "",
+    });
+    if (!syntax) {
+      error.textContent = "Add a label and an http or https link.";
+      return;
+    }
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const before = textarea.value.slice(0, start);
+    const gap = before.length === 0 || /\s$/.test(before) ? "" : " ";
+    textarea.setRangeText(`${gap}${syntax}`, start, end, "end");
+    textarea.focus();
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    close();
+  });
+  document.body.append(overlay);
+  refresh();
+  label.focus();
+}
+
 function closeEditor() {
   if (!openEditor) return;
   openEditor.release?.();
@@ -1292,7 +1453,7 @@ async function openCardEditor(state, draftCard) {
 
   const howTo = el("textarea");
   howTo.value = draft.body;
-  howTo.placeholder = "## How to run\n\n1. Download the models\n2. Queue the prompt\n\n**Bold**, *italic*, `code`, and [a link](https://example.com).";
+  howTo.placeholder = "## How to run\n\n1. Download the models\n2. Queue the prompt\n\n[[button: Watch | https://example.com | #e25b45 | readmore]]";
   const formatTools = el("div", "dh-mdtools");
   for (const label of ["Teal", "Green", "Amber", "Glow", "Table"]) {
     const button = el("button", "", label);
@@ -1316,7 +1477,12 @@ async function openCardEditor(state, draftCard) {
     });
     formatTools.append(button);
   }
-  const howToField = field("How-to (Markdown)", howTo, "Use pipe tables and [teal]text[/teal], [green], [amber], or [glow] with a matching closing tag.");
+  const addButton = el("button", "", "Button");
+  addButton.type = "button";
+  addButton.title = "Insert a colored link button";
+  addButton.addEventListener("click", () => openButtonAsk(howTo));
+  formatTools.append(addButton);
+  const howToField = field("How-to (Markdown)", howTo, "Use pipe tables, [teal]text[/teal], [green], [amber], or [glow], and [[button: Label | https://url | #color | style]].");
   howToField.insertBefore(formatTools, howTo);
   form.append(howToField);
   const preview = el("details", "dh-preview");

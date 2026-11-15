@@ -15,8 +15,9 @@ from __future__ import annotations
 class WorkflowHelper:
     CATEGORY = "Devil Nodes/Utility"
     DESCRIPTION = (
-        "A workflow card for sharing: a big title, a Markdown how-to, the "
-        "models the workflow needs, the custom node packs it depends on, "
+        "A workflow card for sharing: a big title, a Markdown how-to with "
+        "colored link buttons, the models the workflow needs, the custom "
+        "node packs it depends on, "
         "and the author's links. Each model and pack is marked installed "
         "or missing on this ComfyUI. Download fetches the URL on a model "
         "row into that row's models folder. A Civitai token typed on the "

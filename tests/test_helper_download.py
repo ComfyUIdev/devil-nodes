@@ -734,9 +734,9 @@ class ShippedFileTests(unittest.TestCase):
             self.assertNotIn(html, text, path.name)
             self.assertNotIn("insert" + "AdjacentHTML", text, path.name)
 
-    def test_version_is_1_1_4(self):
+    def test_version_is_1_1_5(self):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "1.1.4"', text)
+        self.assertIn('version = "1.1.5"', text)
         self.assertIn("Favorite", text)
         self.assertIn("Workflow Helper", text)
 
