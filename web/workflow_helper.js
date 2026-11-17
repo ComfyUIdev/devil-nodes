@@ -18,9 +18,12 @@ import {
   panelBox,
   downloadBody,
   hostOf,
+  looksLikeModelFile,
   matchFile,
   missingModels,
   modelsFromNode,
+  modelDownloadName,
+  modelNameAfterDownload,
   modelSource,
   mountMarkdown,
   normalizeCard,
@@ -512,6 +515,26 @@ function rowKey(row) {
   return `${row.folder}\n${row.name}`;
 }
 
+/** Store the real model filename on the row once a download reports it. */
+function adoptReportedName(state, row, filename) {
+  const next = modelNameAfterDownload(row.name, row.url, filename);
+  if (!looksLikeModelFile(next) || next === row.name) return false;
+  const models = state.card?.models || [];
+  const match = models.find((item) => item === row || (item.folder === row.folder && item.name === row.name && (item.url || "") === (row.url || "")));
+  if (!match) return false;
+  const previousKey = rowKey(row);
+  match.name = next;
+  row.name = next;
+  const job = state.jobs.get(previousKey);
+  if (job) {
+    state.jobs.delete(previousKey);
+    state.jobs.set(rowKey(row), job);
+  }
+  writeCard(state.node, state.card);
+  renderCard(state);
+  return true;
+}
+
 function applyJob(view, job) {
   const status = job?.status;
   if (status === "downloading") {
@@ -531,11 +554,12 @@ function modelRowView(state, row) {
   const line = el("div", "dh-row");
   const dot = el("span", "dh-dot is-checking");
   const file = el("div", "dh-file");
-  const name = el("div", "dh-name", row.name);
+  const shownName = () => modelDownloadName(row.name, row.url);
+  const name = el("div", "dh-name", shownName());
   name.title = "Click to copy the file name";
   stopDrag(name);
   name.addEventListener("click", () => {
-    const original = row.name;
+    const original = shownName();
     const finish = (label) => {
       name.textContent = label;
       setTimeout(() => {
@@ -664,7 +688,8 @@ async function startDownload(state, row, view) {
     return;
   }
   state.jobs.set(rowKey(row), body);
-  applyJob(view, body);
+  const renamed = adoptReportedName(state, row, body.filename);
+  if (!renamed) applyJob(view, body);
   if (body.status === "done") {
     state.recheck(true);
     return;
@@ -685,12 +710,24 @@ function watchJob(state, row, id) {
       return;
     }
     if (!job || job.status === "idle") return;
-    state.jobs.set(key, job);
-    const view = state.views.get(key);
+    const renamed = adoptReportedName(state, row, job.filename);
+    if (renamed) {
+      clearInterval(timer);
+      state.timers.delete(key);
+      const currentKey = rowKey(row);
+      state.jobs.set(currentKey, job);
+      const view = state.views.get(currentKey);
+      if (view) applyJob(view, job);
+      if (job.status === "done") state.recheck(true);
+      else if (job.status !== "error") watchJob(state, row, id);
+      return;
+    }
+    state.jobs.set(rowKey(row), job);
+    const view = state.views.get(rowKey(row));
     if (view) applyJob(view, job);
     if (job.status === "done" || job.status === "error") {
       clearInterval(timer);
-      state.timers.delete(key);
+      state.timers.delete(rowKey(row));
       if (job.status === "done") state.recheck(true);
     }
   }, 700);
@@ -1077,7 +1114,7 @@ async function checkInstall(state, fresh) {
         view.showUnknown(`This ComfyUI has no "${folder}" model folder`);
         continue;
       }
-      const match = matchFile(row.name, files);
+      const match = matchFile(modelDownloadName(row.name, row.url), files);
       if (match.found) view.showInstalled(match.path ? `Found: ${match.path}` : "Found");
       else view.showMissing(`Not in ${folderLabel(folder)}`);
     }
@@ -1307,7 +1344,7 @@ async function openCardEditor(state, draftCard) {
     return select;
   };
   const models = editorTable("models", ["File", "Folder", "Download URL", "Size", "Note"], draft.models, (row) => [
-    textInput(row.name, "model.safetensors"),
+    textInput(modelDownloadName(row.name, row.url), "model.safetensors"),
     folderMenu(row.folder || "checkpoints"),
     textInput(row.url, "https://huggingface.co/.../resolve/main/model.safetensors"),
     textInput(row.size, "1.2 GB"),

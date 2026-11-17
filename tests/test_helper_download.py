@@ -506,6 +506,191 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(view["message"], "Already installed")
         self.assertEqual(dest.read_bytes(), b"already")
 
+    def test_hub_meter_accepts_xet_progress_calls(self):
+        job = {"status": "downloading", "percent": 0, "speed": "", "message": "", "error": ""}
+        meter = download._make_meter(job)
+        transfer = meter(
+            desc="file: downloading bytes",
+            total=1000,
+            unit="B",
+            unit_scale=True,
+            name="huggingface_hub.xet_get.transfer",
+            position=0,
+            leave=True,
+        )
+        recon = meter(desc="file: reconstructing file", total=None, unit="B", unit_scale=True, name="huggingface_hub.xet_get")
+        transfer.set_postfix_str("  1.2MB/s", refresh=False)
+        recon.set_description_str("file: reconstructing file", refresh=False)
+        recon.set_postfix_str("  800kB/s", refresh=False)
+        transfer.display()
+        transfer.clear()
+        transfer.unpause()
+        transfer.refresh()
+        self.assertIsNone(transfer.not_a_real_tqdm_method("x", refresh=False))
+        with self.assertRaises(AttributeError):
+            getattr(transfer, "__missing_dunder__")
+
+        # Byte deltas. The file size shows up after the first writes.
+        recon.update(400)
+        self.assertEqual(job["percent"], 0)
+        recon.total = 1000
+        self.assertEqual(job["percent"], 40)
+        # A second bar, and a total that grows the way Xet grows the transfer bar, must not rewind or pass 100.
+        transfer.update(200)
+        self.assertEqual(job["percent"], 40)
+        ahead = transfer.n + 5000
+        if (transfer.total or 0) < ahead:
+            transfer.total = max(transfer.total or 0, int(ahead * 1.25) + 1)
+        transfer.update(5000)
+        self.assertGreaterEqual(job["percent"], 40)
+        self.assertLessEqual(job["percent"], 100)
+        recon.update(550)
+        self.assertGreaterEqual(job["percent"], 40)
+        self.assertLessEqual(job["percent"], 100)
+
+        fresh = {"status": "downloading", "percent": 0, "speed": "", "message": "", "error": ""}
+        restarted = download._make_meter(fresh)(unit="B", unit_scale=True)
+        restarted.update(10)
+        restarted.reset(total=200)
+        self.assertEqual(restarted.n, 0)
+        self.assertEqual(restarted.total, 200)
+        restarted.update(50)
+        self.assertEqual(fresh["percent"], 25)
+
+    def _hf_job(self, spec):
+        return {
+            "id": spec["id"],
+            "status": "downloading",
+            "percent": 0,
+            "speed": "",
+            "message": "",
+            "error": "",
+            "filename": spec["filename"],
+            "folder": spec["folder"],
+            "secrets": [],
+        }
+
+    def test_repo_url_with_one_model_file_saves_that_filename(self):
+        token = "hf_" + "a" * 30
+        weight = "viggle-image-swap-v0.1-lora.safetensors"
+        spec = download.prepare_download(
+            {
+                "url": "https://huggingface.co/Viggle/Viggle-Image-Swap",
+                "filename": "Viggle/Viggle-Image-Swap",
+                "folder": "loras",
+            },
+            self.folders,
+        )
+        self.assertEqual(spec["source"]["kind"], "hf")
+        self.assertEqual(spec["source"]["hf"]["repo_id"], "Viggle/Viggle-Image-Swap")
+        self.assertEqual(spec["source"]["hf"]["file_path"], "")
+        self.assertFalse(spec["source"]["hf"]["file_in_url"])
+        self.assertEqual(spec["filename"], "Viggle/Viggle-Image-Swap")
+        pasted = download.classify_source("hf://Viggle/Viggle-Image-Swap")
+        self.assertEqual(pasted["hf"]["file_path"], "")
+        self.assertFalse(pasted["hf"]["file_in_url"])
+        seen = {}
+
+        def list_repo_files(**kwargs):
+            seen["list"] = kwargs
+            return ["README.md", weight, "config.json"]
+
+        def fake_download(**kwargs):
+            seen["download"] = kwargs
+            path = Path(kwargs["local_dir"]) / kwargs["filename"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"viggle-weights")
+            return str(path)
+
+        hub = types.ModuleType("huggingface_hub")
+        hub.list_repo_files = list_repo_files
+        hub.hf_hub_download = fake_download
+        job = self._hf_job(spec)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            asyncio.run(download.download_hf(spec["source"]["hf"], spec["dest"], job, hf_token=token))
+        saved = self.root / "loras" / weight
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["filename"], weight)
+        self.assertEqual(saved.read_bytes(), b"viggle-weights")
+        self.assertFalse((self.root / "loras" / "Viggle").exists())
+        self.assertEqual(seen["list"]["repo_id"], "Viggle/Viggle-Image-Swap")
+        self.assertEqual(seen["list"]["token"], token)
+        self.assertEqual(seen["download"]["filename"], weight)
+        self.assertEqual(seen["download"]["token"], token)
+
+    def test_repo_url_with_several_model_files_asks_for_the_file_link(self):
+        spec = download.prepare_download(
+            {
+                "url": "https://huggingface.co/Viggle/Viggle-Image-Swap/tree/main",
+                "filename": "Viggle/Viggle-Image-Swap",
+                "folder": "loras",
+            },
+            self.folders,
+        )
+        self.assertEqual(spec["source"]["hf"]["revision"], "main")
+        called = {"download": 0}
+
+        def list_repo_files(**kwargs):
+            return ["README.md", "one.safetensors", "two.ckpt", "notes.md"]
+
+        def fake_download(**kwargs):
+            called["download"] += 1
+            raise AssertionError("ambiguous repo should not download")
+
+        hub = types.ModuleType("huggingface_hub")
+        hub.list_repo_files = list_repo_files
+        hub.hf_hub_download = fake_download
+        job = self._hf_job(spec)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            asyncio.run(download.download_hf(spec["source"]["hf"], spec["dest"], job, hf_token=""))
+        self.assertEqual(job["status"], "error")
+        self.assertIn("Paste the link to the file", job["error"])
+        self.assertIn("one.safetensors", job["error"])
+        self.assertIn("two.ckpt", job["error"])
+        self.assertEqual(called["download"], 0)
+        self.assertEqual([path for path in (self.root / "loras").rglob("*") if path.is_file()], [])
+        self.assertFalse((self.root / "loras" / "Viggle" / "Viggle-Image-Swap").exists())
+
+    def test_file_url_uses_the_repo_filename_when_the_row_name_has_no_extension(self):
+        weight = "viggle-image-swap-v0.1-lora.safetensors"
+        url = f"https://huggingface.co/Viggle/Viggle-Image-Swap/resolve/main/{weight}"
+        spec = download.prepare_download(
+            {"url": url, "filename": "Viggle/Viggle-Image-Swap", "folder": "loras"},
+            self.folders,
+        )
+        self.assertTrue(spec["source"]["hf"]["file_in_url"])
+        self.assertEqual(spec["source"]["hf"]["file_path"], weight)
+        self.assertEqual(spec["filename"], weight)
+        self.assertTrue(spec["dest"].endswith(weight))
+
+        def fake_download(**kwargs):
+            path = Path(kwargs["local_dir"]) / kwargs["filename"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"from-file-url")
+            return str(path)
+
+        hub = types.ModuleType("huggingface_hub")
+        hub.hf_hub_download = fake_download
+        job = self._hf_job(spec)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            asyncio.run(download.download_hf(spec["source"]["hf"], spec["dest"], job, hf_token=""))
+        saved = Path(spec["dest"])
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(saved.name, weight)
+        self.assertEqual(saved.read_bytes(), b"from-file-url")
+        self.assertFalse((self.root / "loras" / "Viggle").exists())
+
+        kept = download.prepare_download(
+            {"url": url, "filename": "keep.safetensors", "folder": "loras"},
+            self.folders,
+        )
+        self.assertEqual(kept["filename"], "keep.safetensors")
+        kept_job = self._hf_job(kept)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            asyncio.run(download.download_hf(kept["source"]["hf"], kept["dest"], kept_job, hf_token=""))
+        self.assertEqual(kept_job["filename"], "keep.safetensors")
+        self.assertEqual(Path(kept["dest"]).read_bytes(), b"from-file-url")
+
     def test_prepare_rejects_a_bad_url_before_any_write(self):
         with self.assertRaises(download.SourceError):
             download.prepare_download(
@@ -549,9 +734,9 @@ class ShippedFileTests(unittest.TestCase):
             self.assertNotIn(html, text, path.name)
             self.assertNotIn("insert" + "AdjacentHTML", text, path.name)
 
-    def test_version_is_1_1_3(self):
+    def test_version_is_1_1_4(self):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "1.1.3"', text)
+        self.assertIn('version = "1.1.4"', text)
         self.assertIn("Favorite", text)
         self.assertIn("Workflow Helper", text)
 

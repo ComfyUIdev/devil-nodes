@@ -16,7 +16,10 @@ import {
   missingModels,
   modelsFromNode,
   panelBox,
+  hubFilePath,
   matchFile,
+  modelDownloadName,
+  modelNameAfterDownload,
   modelSource,
   mountMarkdown,
   normalizeCard,
@@ -180,6 +183,34 @@ test("unsafe urls are dropped and download urls keep the schemes the server fetc
   assert.equal(card.links[1].url, "https://example.com/docs");
   assert.equal(safeLink("javascript:alert(1)"), "");
   assert.equal(modelSource("b2://bucket/file.safetensors").startsWith("b2:"), true);
+});
+
+test("a huggingface file url names the model, and a repo page waits for the saved file", () => {
+  const weight = "viggle-image-swap-v0.1-lora.safetensors";
+  const fileUrl = `https://huggingface.co/Viggle/Viggle-Image-Swap/resolve/main/${weight}`;
+  const repoUrl = "https://huggingface.co/Viggle/Viggle-Image-Swap";
+  assert.equal(modelDownloadName("Viggle/Viggle-Image-Swap", fileUrl), weight);
+  assert.equal(modelDownloadName("custom.safetensors", fileUrl), "custom.safetensors");
+  assert.equal(
+    modelDownloadName("Viggle-Image-Swap", `https://hf.co/Viggle/Viggle-Image-Swap/blob/main/${weight}`),
+    weight,
+  );
+  assert.equal(
+    modelDownloadName("Viggle/Viggle-Image-Swap", `hf://Viggle/Viggle-Image-Swap/${weight}`),
+    weight,
+  );
+  assert.equal(hubFilePath(repoUrl), "");
+  assert.equal(modelDownloadName("Viggle/Viggle-Image-Swap", repoUrl), "Viggle/Viggle-Image-Swap");
+  assert.equal(modelNameAfterDownload("Viggle/Viggle-Image-Swap", repoUrl, weight), weight);
+  assert.equal(
+    modelNameAfterDownload("Viggle/Viggle-Image-Swap", repoUrl, "one.safetensors"),
+    "one.safetensors",
+  );
+  const posted = downloadBody({ url: fileUrl, name: "Viggle/Viggle-Image-Swap", folder: "loras" });
+  assert.equal(posted.filename, weight);
+  const found = matchFile(modelDownloadName("Viggle/Viggle-Image-Swap", fileUrl), [weight]);
+  assert.equal(found.found, true);
+  assert.equal(found.path, weight);
 });
 
 test("files match by exact path or by name inside a subfolder", () => {

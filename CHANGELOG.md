@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4 - 2026-11-17
+
+- Workflow Helper Hugging Face downloads work with huggingface_hub 2.2. The progress meter accepts the tqdm methods Xet uses, and the percent does not pass 100 or move backwards.
+- A Hugging Face repo link, or a file link whose row name has no model extension, saves the real model file (for example `viggle-image-swap-v0.1-lora.safetensors`) into the chosen folder. A repo with several model files asks for the file link instead of saving a nameless copy. The card row uses that file name for the installed check.
+
 ## 1.1.3 - 2026-11-11
 
 - Favorite and Workflow Helper are listed under **Devil Nodes/Utility** in the node menu.

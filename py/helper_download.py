@@ -7,6 +7,7 @@ that would leave that directory are rejected.
 Supported sources:
 - ``http`` and ``https`` links, including Hugging Face and Civitai pages
 - ``hf://org/repo/path`` and a pasted ``hf download hf://...`` command
+- a Hugging Face repo page, when that repo has one model file
 - ``b2:`` links, fetched with rclone when it is installed
 
 A Hugging Face token comes only from ``huggingface_hub.get_token``
@@ -45,6 +46,31 @@ CIVITAI_AUTH_MESSAGE = (
 )
 # One socket operation, connect or read. The download itself is not capped.
 HTTP_TIMEOUT_SECONDS = 300
+
+# Same suffixes the card treats as a model file (see looksLikeModelFile).
+MODEL_EXTENSIONS = (
+    ".safetensors",
+    ".ckpt",
+    ".pt",
+    ".pt2",
+    ".pth",
+    ".bin",
+    ".gguf",
+    ".onnx",
+    ".sft",
+    ".pkl",
+)
+# A repo page with exactly one of these is that file. Several is ambiguous.
+WEIGHT_EXTENSIONS = (
+    ".safetensors",
+    ".ckpt",
+    ".pt",
+    ".pth",
+    ".bin",
+    ".gguf",
+    ".sft",
+    ".onnx",
+)
 
 _TOKEN_PLACEHOLDERS = {
     "hf_token",
@@ -262,14 +288,15 @@ def _parse_hf_url(url):
     if parts and parts[0] in {"datasets", "dataset", "spaces", "space", "models", "model"}:
         prefix = parts.pop(0)
         repo_type = {"datasets": "dataset", "dataset": "dataset", "spaces": "space", "space": "space"}.get(prefix, "model")
-    if len(parts) < 3:
-        raise SourceError("The Hugging Face link needs org/repo/file.")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise SourceError("The Hugging Face link needs org/repo.")
     file_path = "/".join(parts[2:])
     return {
         "repo_id": f"{parts[0]}/{parts[1]}",
         "repo_type": repo_type,
         "revision": None,
         "file_path": file_path,
+        "file_in_url": bool(file_path),
     }
 
 
@@ -285,17 +312,154 @@ def _parse_hf_web(url):
     if parts and parts[0] in {"datasets", "dataset", "spaces", "space"}:
         prefix = parts.pop(0)
         repo_type = "dataset" if prefix.startswith("dataset") else "space"
-    if len(parts) < 5 or parts[2] not in {"resolve", "blob"}:
+    if len(parts) < 2:
         return None
-    file_path = urllib.parse.unquote("/".join(parts[4:]))
-    if not file_path:
-        return None
-    return {
-        "repo_id": f"{parts[0]}/{parts[1]}",
-        "repo_type": repo_type,
-        "revision": urllib.parse.unquote(parts[3]),
-        "file_path": file_path,
+    if len(parts) >= 5 and parts[2] in {"resolve", "blob"}:
+        file_path = urllib.parse.unquote("/".join(parts[4:]))
+        if not file_path:
+            return None
+        return {
+            "repo_id": f"{parts[0]}/{parts[1]}",
+            "repo_type": repo_type,
+            "revision": urllib.parse.unquote(parts[3]),
+            "file_path": file_path,
+            "file_in_url": True,
+        }
+    # https://huggingface.co/org/repo or .../tree/<revision> names a repo, not a file.
+    if len(parts) == 2 or (len(parts) >= 4 and parts[2] == "tree"):
+        revision = urllib.parse.unquote(parts[3]) if len(parts) >= 4 and parts[2] == "tree" else None
+        return {
+            "repo_id": f"{parts[0]}/{parts[1]}",
+            "repo_type": repo_type,
+            "revision": revision,
+            "file_path": "",
+            "file_in_url": False,
+        }
+    return None
+
+
+def has_model_extension(filename):
+    """True when the last path piece ends with a model suffix the card recognizes."""
+    base = (filename or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return any(base.endswith(ext) for ext in MODEL_EXTENSIONS)
+
+
+def _weight_file(path):
+    base = (path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if not base or base.startswith("."):
+        return False
+    return any(base.endswith(ext) for ext in WEIGHT_EXTENSIONS)
+
+
+def _needs_fetched_name(requested, spec):
+    """The row name is not a model file, or the link is a repo page with no file."""
+    if not isinstance(spec, dict):
+        return False
+    if spec.get("file_in_url") is False:
+        return True
+    if not requested:
+        return False
+    return not has_model_extension(requested)
+
+
+def _model_relpath(spec, saved):
+    """Repo-relative model path, or the basename ``huggingface_hub`` actually wrote."""
+    file_path = (spec.get("file_path") or "").replace("\\", "/").strip("/")
+    if file_path and has_model_extension(file_path):
+        parts = file_path.split("/")
+        if all(part not in {"", ".", ".."} for part in parts):
+            return file_path
+    base = os.path.basename((saved or "").replace("\\", "/"))
+    if has_model_extension(base):
+        return base
+    return ""
+
+
+def _filename_for_download(filename, spec):
+    if not _needs_fetched_name(filename, spec):
+        return filename
+    renamed = _model_relpath(spec, "")
+    if has_model_extension(renamed):
+        return renamed
+    return filename
+
+
+def _retarget_dest(dest, old_name, new_name):
+    """Move ``dest`` so it uses ``new_name`` inside the same model folder."""
+    old_parts = relative_parts(old_name)
+    root = dest
+    for _part in old_parts:
+        root = os.path.dirname(root)
+    root = os.path.realpath(root)
+    parts = relative_parts(new_name)
+    new_dest = os.path.realpath(os.path.join(root, *parts))
+    try:
+        inside = os.path.commonpath([root, new_dest]) == root
+    except ValueError as exc:
+        raise DestinationError("That file name would leave the model folder.") from exc
+    if not inside or new_dest == root:
+        raise DestinationError("That file name would leave the model folder.")
+    return new_dest
+
+
+def _point_dest_at_model(spec, dest, job):
+    """Point the save path at the fetched model when the row name cannot be one."""
+    requested = job.get("filename") or ""
+    if not _needs_fetched_name(requested, spec):
+        job["dest"] = dest
+        return dest
+    renamed = _model_relpath(spec, "")
+    if not has_model_extension(renamed) or renamed == requested:
+        job["dest"] = dest
+        return dest
+    dest = _retarget_dest(dest, requested, renamed)
+    job["filename"] = renamed
+    job["dest"] = dest
+    return dest
+
+
+def _select_repo_file(spec, token):
+    """The one model weight in a repo. Several weights is an error, not a guess."""
+    kwargs = {
+        "repo_id": spec["repo_id"],
+        "repo_type": spec.get("repo_type") or "model",
     }
+    if spec.get("revision"):
+        kwargs["revision"] = spec["revision"]
+    if token:
+        kwargs["token"] = token
+    try:
+        from huggingface_hub import list_repo_files
+    except ImportError:
+        from huggingface_hub import HfApi
+
+        listed = HfApi().list_repo_files(**kwargs)
+    else:
+        listed = list_repo_files(**kwargs)
+    weights = []
+    for path in listed or []:
+        if not isinstance(path, str):
+            continue
+        text = path.replace("\\", "/").strip("/")
+        if not text or any(part in {".", ".."} for part in text.split("/")):
+            continue
+        if _weight_file(text):
+            weights.append(text)
+    if len(weights) == 1:
+        return weights[0]
+    if not weights:
+        raise DownloadError(
+            "This Hugging Face repo has no model file "
+            "(.safetensors, .ckpt, .pt, .pth, .bin, .gguf, .sft, .onnx). "
+            "Paste the link to the file you want."
+        )
+    preview = ", ".join(os.path.basename(path) for path in weights[:5])
+    if len(weights) > 5:
+        preview = f"{preview}, …"
+    raise DownloadError(
+        f"This Hugging Face repo has {len(weights)} model files ({preview}). "
+        "Paste the link to the file you want."
+    )
 
 
 def relative_parts(filename):
@@ -437,6 +601,10 @@ def prepare_download(data, folders):
     source = classify_source(data.get("url") or data.get("source") or "")
     filename = "/".join(relative_parts(data.get("filename") or data.get("name") or ""))
     folder = (data.get("folder") or data.get("dir") or "").strip()
+    if source["kind"] == "hf":
+        renamed = _filename_for_download(filename, source["hf"])
+        if renamed != filename:
+            filename = "/".join(relative_parts(renamed))
     dest = resolve_model_path(folder, filename, folders)
     return {
         "id": _job_id(folder, filename),
@@ -614,20 +782,69 @@ def _hub_https_url(spec):
     return f"https://huggingface.co/{prefix}{repo}/resolve/{revision}/{file_path}"
 
 
+def _meter_float(value):
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if number < 0:
+        return 0.0
+    return number
+
+
 def _make_meter(job):
+    """A tqdm stand-in for ``huggingface_hub``.
+
+    Xet downloads in huggingface_hub 2.x call ``set_postfix_str`` and may open
+    two bars (bytes on the wire, and bytes written). ``unit`` and ``unit_scale``
+    are accepted and ignored: ``update`` is still a byte count. Unknown tqdm
+    methods are ignored. The percent on the card never passes 100 and never
+    moves backwards when those bars update out of order.
+    """
+
     class HubMeter:
         def __init__(self, *args, **kwargs):
-            self.total = kwargs.get("total") or 0
-            self.n = 0
+            # huggingface_hub may pass name, desc, unit, unit_scale, bar_format, and others.
+            self._n = _meter_float(kwargs.get("initial"))
+            self._total = _meter_float(kwargs.get("total"))
+            if self._n > 0:
+                self._report()
+
+        @property
+        def n(self):
+            return self._n
+
+        @n.setter
+        def n(self, value):
+            self._n = _meter_float(value)
+            self._report()
+
+        @property
+        def total(self):
+            return self._total
+
+        @total.setter
+        def total(self, value):
+            self._total = _meter_float(value)
+            self._report()
 
         def update(self, n=1):
             try:
-                self.n += float(n or 0)
+                delta = float(0 if n is None else n)
             except (TypeError, ValueError):
                 return None
-            if self.total:
-                _note(job, percent=self.n * 100 / self.total)
+            self._n += delta
+            if self._n < 0:
+                self._n = 0
+            self._report()
             return None
+
+        def reset(self, total=None):
+            self._n = 0
+            if total:
+                parsed = _meter_float(total)
+                if parsed:
+                    self._total = parsed
 
         def close(self):
             return None
@@ -635,16 +852,26 @@ def _make_meter(job):
         def set_description(self, *args, **kwargs):
             return None
 
+        def set_description_str(self, *args, **kwargs):
+            return None
+
         def set_postfix(self, *args, **kwargs):
+            return None
+
+        def set_postfix_str(self, *args, **kwargs):
+            return None
+
+        def display(self, *args, **kwargs):
+            return None
+
+        def clear(self, *args, **kwargs):
+            return None
+
+        def unpause(self, *args, **kwargs):
             return None
 
         def refresh(self, *args, **kwargs):
             return None
-
-        def reset(self, total=None):
-            self.n = 0
-            if total:
-                self.total = total
 
         def __enter__(self):
             return self
@@ -652,6 +879,27 @@ def _make_meter(job):
         def __exit__(self, *exc):
             self.close()
             return False
+
+        def __getattr__(self, name):
+            if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
+                raise AttributeError(name)
+
+            def _noop(*args, **kwargs):
+                return None
+
+            return _noop
+
+        def _report(self):
+            if self._n <= 0 or self._total <= 0:
+                return
+            percent = self._n * 100.0 / self._total
+            if percent > 100:
+                percent = 100
+            shown = int(percent)
+            current = int(job.get("percent") or 0)
+            if shown < current:
+                return
+            _note(job, percent=shown)
 
     return HubMeter
 
@@ -679,6 +927,10 @@ def _hf_cli_args(binary, spec, work):
 
 
 def _place_download(saved, dest):
+    if not has_model_extension(dest):
+        raise DownloadError(
+            "Refusing to save a model file without its extension. Paste the link to the file."
+        )
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.islink(saved):
         shutil.copyfile(saved, dest)
@@ -697,6 +949,28 @@ async def download_hf(spec, dest, job, hf_token=""):
     job["secrets"] = secrets
     _note(job, message="Downloading from Hugging Face…")
     try:
+        if not spec.get("file_path"):
+            spec["file_path"] = await asyncio.to_thread(_select_repo_file, spec, hf_token)
+            spec["file_in_url"] = False
+        dest = _point_dest_at_model(spec, dest, job)
+        if not has_model_extension(job.get("filename") or ""):
+            raise DownloadError(
+                "Refusing to save a model file without its extension. Paste the link to the file."
+            )
+    except DownloadError as exc:
+        _fail(job, str(exc), secrets)
+        return
+    except ImportError:
+        _fail(
+            job,
+            "This Hugging Face link is a repository. Paste the link to the file, or install huggingface_hub.",
+            secrets,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001
+        _fail(job, _hf_failure_message(exc), secrets)
+        return
+    try:
         await asyncio.to_thread(_hub_download_blocking, spec, dest, job, hf_token)
     except ImportError:
         cli = _hf_cli_path()
@@ -711,7 +985,7 @@ async def download_hf(spec, dest, job, hf_token=""):
     except Exception as exc:  # noqa: BLE001
         _fail(job, _hf_failure_message(exc), secrets)
         return
-    _finish(job, dest)
+    _finish(job, job.get("dest") or dest)
 
 
 def _hub_download_blocking(spec, dest, job, token):
@@ -869,7 +1143,8 @@ async def run_spec(spec, job, hf_token="", civitai_token=""):
 def begin_download(spec, hf_token="", civitai_token=""):
     """Start a job or return the one already saving this file. Does not block."""
     dest = spec["dest"]
-    if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+    # An extensionless path is the repo name, not an installed model. Fetch the file.
+    if os.path.isfile(dest) and os.path.getsize(dest) > 0 and has_model_extension(spec.get("filename") or ""):
         job = {
             "id": spec["id"],
             "status": "done",
