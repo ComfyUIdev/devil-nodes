@@ -104,7 +104,7 @@ export function rememberCivitaiToken(storage, value) {
 export function downloadBody(row, civitaiToken) {
   const body = {
     url: row?.url || "",
-    filename: row?.name || "",
+    filename: modelDownloadName(row?.name || "", row?.url || ""),
     folder: row?.folder || "",
   };
   const token = typeof civitaiToken === "string" ? civitaiToken.trim() : "";
@@ -362,6 +362,75 @@ export function looksLikeModelFile(value) {
   if (parts.some((part) => !part || part === "." || part === "..")) return false;
   const base = parts[parts.length - 1].toLowerCase();
   return MODEL_EXTENSIONS.some((ext) => base.endsWith(ext));
+}
+
+const HUB_HOSTS = new Set(["huggingface.co", "hf.co"]);
+
+function decodePart(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+function stripHubPrefix(parts) {
+  if (!parts.length) return parts;
+  const head = parts[0];
+  if (head === "datasets" || head === "dataset" || head === "spaces" || head === "space" || head === "models" || head === "model") {
+    return parts.slice(1);
+  }
+  return parts;
+}
+
+/** Relative file path when a Hugging Face URL names a file. Empty for a repo page. */
+export function hubFilePath(url) {
+  const source = modelSource(url);
+  if (!source) return "";
+  let kind = "web";
+  let parts = [];
+  if (/^hf:\/\//i.test(source)) {
+    kind = "hf";
+    parts = source.replace(/^hf:\/\//i, "").split("/").filter(Boolean);
+  } else {
+    let parsed;
+    try {
+      parsed = new URL(source);
+    } catch {
+      return "";
+    }
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    if (!HUB_HOSTS.has(host)) return "";
+    parts = parsed.pathname.split("/").filter(Boolean).map(decodePart);
+  }
+  parts = stripHubPrefix(parts);
+  let file = "";
+  if (kind === "hf") {
+    if (parts.length < 3) return "";
+    file = parts.slice(2).join("/");
+  } else if (parts.length >= 5 && (parts[2] === "resolve" || parts[2] === "blob")) {
+    file = parts.slice(4).join("/");
+  }
+  return looksLikeModelFile(file) ? file : "";
+}
+
+/**
+ * Name to show and to match in the models folder.
+ * A file URL replaces a row name that has no model extension.
+ * A repo page keeps the row name until the download reports the real file.
+ */
+export function modelDownloadName(name, url) {
+  const current = String(name ?? "").trim().replace(/\\/g, "/");
+  const fromUrl = hubFilePath(url);
+  if (fromUrl && !looksLikeModelFile(current)) return fromUrl;
+  return current;
+}
+
+/** Prefer the file the server saved, then the name a file URL already implies. */
+export function modelNameAfterDownload(name, url, reported) {
+  const fromServer = String(reported ?? "").trim().replace(/\\/g, "/");
+  if (looksLikeModelFile(fromServer)) return fromServer;
+  return modelDownloadName(name, url);
 }
 
 function cleanFolder(value) {
