@@ -21,14 +21,21 @@ import {
   modelDownloadName,
   modelNameAfterDownload,
   modelSource,
+  buttonColor,
+  buttonInk,
+  buttonText,
+  formatButton,
   mountMarkdown,
   normalizeCard,
   packsFromNodes,
+  parseButtonSpec,
   parseMarkdown,
+  readPixaromaButton,
   rememberCivitaiToken,
   showsTile,
   storedCivitaiToken,
   tileIsDownloadList,
+  translateButtonMarkup,
   safeLink,
   serializeCard,
 } from "../web/workflow_helper_card.js";
@@ -40,6 +47,15 @@ function documentShim() {
       this.children = [];
       this.attrs = {};
       this._text = null;
+      const props = {};
+      this.style = {
+        setProperty(name, value) {
+          props[name] = String(value);
+        },
+        getPropertyValue(name) {
+          return props[name] || "";
+        },
+      };
     }
 
     get textContent() {
@@ -450,4 +466,119 @@ test("markdown is mounted as text, including markup that must not run", () => {
   assert.match(root.textContent, /javascript:alert\(1\)/);
   assert.equal(doc.tags(root, "li").length, 2);
   assert.equal(doc.tags(root, "h1")[0].textContent, "Title");
+});
+
+test("button syntax parses label, url, color, style, and a download size", () => {
+  const full = parseButtonSpec(" Get the model | https://example.com/model.safetensors | #F66744 | download | 1.2 GB ");
+  assert.equal(full.label, "Get the model");
+  assert.equal(full.url, "https://example.com/model.safetensors");
+  assert.equal(full.color, "#f66744");
+  assert.equal(full.style, "download");
+  assert.equal(full.size, "1.2 GB");
+
+  const short = parseButtonSpec("Watch | https://example.com/watch");
+  assert.equal(short.color, "#e25b45");
+  assert.equal(short.style, "link");
+  assert.equal(short.size, "");
+
+  const styled = parseButtonSpec("Notes | https://example.com/notes | plain");
+  assert.equal(styled.style, "plain");
+  assert.equal(styled.color, "#e25b45");
+
+  const rgb = parseButtonSpec("Teal | https://example.com | rgb(61, 204, 199) | readmore");
+  assert.equal(rgb.color, "rgb(61, 204, 199)");
+  assert.equal(rgb.style, "readmore");
+
+  const sized = parseButtonSpec("File | https://example.com/file | download | 724 MB");
+  assert.equal(sized.style, "download");
+  assert.equal(sized.size, "724 MB");
+  assert.equal(sized.color, "#e25b45");
+
+  const line = parseMarkdown([
+    "[[button: Watch | https://example.com/watch | #e25b45 | readmore]] [[button: Get the model | https://example.com/model.safetensors | #f0b429 | download | 1.2 GB]]",
+  ].join("\n"));
+  assert.equal(line[0].type, "buttons");
+  assert.equal(line[0].items.length, 2);
+  assert.equal(line[0].items[0].style, "readmore");
+  assert.equal(line[0].items[1].size, "1.2 GB");
+  assert.equal(formatButton(line[0].items[1]), "[[button: Get the model | https://example.com/model.safetensors | #f0b429 | download | 1.2 GB]]");
+
+  const mixed = parseMarkdown("See [[button: Docs | https://example.com/docs]] now");
+  assert.equal(mixed[0].type, "paragraph");
+  assert.equal(mixed[0].spans.some((span) => span.type === "button"), true);
+
+  assert.equal(buttonColor("#fff"), "#fff");
+  assert.equal(buttonColor("rgb(999, 0, 0)"), "");
+  assert.equal(buttonColor("red"), "");
+  assert.equal(buttonColor("expression(alert(1))"), "");
+  assert.equal(buttonInk("#ffffff"), "#2a100d");
+  assert.equal(buttonInk("#000000"), "#fff7f4");
+  assert.equal(buttonInk("#e25b45"), "#2a100d");
+  assert.equal(buttonText("#e25b45", "plain"), "#e25b45");
+  assert.equal(buttonText("#000000", "plain"), "#fff7f4");
+});
+
+test("unsafe button urls and colors are not painted, and pasted pixaroma html becomes a button", () => {
+  const rejected = parseMarkdown("[[button: X | javascript:alert(1) | #fff | readmore]]");
+  assert.equal(rejected[0].spans.some((span) => span.type === "button"), false);
+  assert.match(rejected.map((block) => block.spans?.map((span) => span.text || "").join("")).join("\n"), /javascript:alert\(1\)/);
+
+  const dyed = parseMarkdown("[[button: Safe | https://example.com/safe | #zzzzzz | plain]]");
+  assert.equal(dyed[0].type, "buttons");
+  assert.equal(dyed[0].items[0].color, "#e25b45");
+  assert.equal(dyed[0].items[0].style, "plain");
+  assert.equal(dyed[0].items[0].url, "https://example.com/safe");
+
+  const named = parseMarkdown("[[button: Safe | https://example.com/safe | expression(alert(1))]]");
+  assert.equal(named[0].items[0].color, "#e25b45");
+  assert.equal(named[0].items[0].size, "");
+
+  const pasted = [
+    '<p><span class="pix-note-btnblock"><a class="pix-note-rm" style="background-color: #f66744" href="https://www.youtube.com/@pixaroma" target="_blank" rel="noopener noreferrer">Pixaroma YouTube Channel</a></span></p>',
+    '<span class="pix-note-btnblock"><a class="pix-note-dl" href="https://example.com/model.safetensors" style="background-color: rgb(61, 204, 199)" onclick="alert(1)">Get the model<span class="pix-note-btnsize">1.2 GB</span></a></span>',
+    '<span class="pix-note-btnblock"><a class="pix-note-btn-plain" style="background-color: red" href="https://example.com/notes">Notes</a></span>',
+    "",
+    '<span class="pix-note-btnblock"><a class="pix-note-vp" href="javascript:alert(1)" style="background-color: url(javascript:alert(1))">Click</a></span>',
+    "<script>alert(1)</script>",
+  ].join("\n");
+  const read = readPixaromaButton(pasted.split("\n")[0]);
+  assert.equal(read.label, "Pixaroma YouTube Channel");
+  assert.equal(read.url, "https://www.youtube.com/@pixaroma");
+  assert.equal(read.color, "#f66744");
+  assert.equal(read.style, "readmore");
+  assert.match(translateButtonMarkup(pasted), /\[\[button: Pixaroma YouTube Channel \| https:\/\/www\.youtube\.com\/@pixaroma \| #f66744 \| readmore\]\]/);
+  assert.doesNotMatch(translateButtonMarkup(pasted), /onclick|pix-note-btnblock|<a /i);
+
+  const doc = documentShim();
+  const root = doc.createElement("div");
+  mountMarkdown(doc, root, pasted);
+  assert.equal(doc.tags(root, "script").length, 0);
+  const links = doc.tags(root, "a");
+  assert.equal(links.length, 3);
+  assert.deepEqual(links.map((link) => link.className), [
+    "devil-btn devil-btn-readmore",
+    "devil-btn devil-btn-download",
+    "devil-btn devil-btn-plain",
+  ]);
+  assert.equal(links[0].href, "https://www.youtube.com/@pixaroma");
+  assert.equal(links[0].attrs.target, "_blank");
+  assert.equal(links[0].attrs.rel, "noopener noreferrer");
+  assert.equal(links[0].style.getPropertyValue("--devil-btn-bg"), "#f66744");
+  assert.equal(links[0].style.getPropertyValue("--devil-btn-fg"), "#2a100d");
+  assert.equal(links[0].attrs.onclick, undefined);
+  assert.equal(links[1].href, "https://example.com/model.safetensors");
+  assert.equal(links[1].style.getPropertyValue("--devil-btn-bg"), "rgb(61, 204, 199)");
+  const badge = links[1].children.find((child) => child.className === "devil-btnsize");
+  assert.equal(badge.textContent, "1.2 GB");
+  assert.equal(links[2].style.getPropertyValue("--devil-btn-bg"), "#e25b45");
+  assert.equal(links[2].style.getPropertyValue("--devil-btn-fg"), "#e25b45");
+  assert.match(root.textContent, /Click/);
+  assert.match(root.textContent, /<script>alert\(1\)<\/script>/);
+  assert.doesNotMatch(links.map((link) => link.href).join("\n"), /javascript:/);
+  assert.equal(doc.tags(root, "div").some((node) => node.className === "devil-btnrow"), true);
+
+  const fenced = parseMarkdown('```\n<span class="pix-note-btnblock"><a class="pix-note-rm" href="https://example.com">X</a></span>\n```');
+  assert.equal(fenced[0].type, "code");
+  assert.match(fenced[0].text, /pix-note-btnblock/);
+  assert.equal(fenced.some((block) => block.type === "buttons"), false);
 });

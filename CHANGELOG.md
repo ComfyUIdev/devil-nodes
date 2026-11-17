@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5 - 2026-11-17
+
+- Workflow Helper how-to buttons use `[[button: Label | https://url | #color | style]]`. The pill opens in a new tab. Styles are link, download, read more, and plain. A download button can show a size badge. Several buttons on one line sit side by side and wrap.
+- The how-to toolbar has **Button**, which asks for the label, URL, color, and style, then inserts that line.
+- A pasted Pixaroma button (`pix-note-btnblock` with a download, view-page, read-more, or plain link) is shown as one of these pills. Only its label, link, color, and style are kept.
+
 ## 1.1.4 - 2026-11-17
 
 - Workflow Helper Hugging Face downloads work with huggingface_hub 2.2. The progress meter accepts the tqdm methods Xet uses, and the percent does not pass 100 or move backwards.

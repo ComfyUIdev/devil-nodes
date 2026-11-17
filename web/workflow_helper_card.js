@@ -3,7 +3,8 @@
  * and the installed-file match. No network and no ComfyUI imports.
  *
  * Shared workflows are someone else's text. Links are http(s) only, and the
- * Markdown renderer builds text nodes rather than HTML.
+ * Markdown renderer builds text nodes rather than HTML. A colored button is
+ * the same kind of link: the URL is checked, and the color is hex or rgb().
  */
 
 export const CARD_VERSION = 1;
@@ -542,6 +543,329 @@ export function packsFromNodes(nodes) {
   return packs;
 }
 
+export const DEFAULT_BUTTON_COLOR = "#e25b45";
+const BUTTON_INK_LIGHT = "#fff7f4";
+const BUTTON_INK_DARK = "#2a100d";
+const BUTTON_CARD = "#1c1412";
+
+function buttonChannels(color) {
+  const text = buttonColor(color);
+  if (!text) return null;
+  if (text.startsWith("#")) {
+    let hex = text.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      hex = hex.slice(0, 3).split("").map((part) => part + part).join("");
+    } else {
+      hex = hex.slice(0, 6);
+    }
+    return [0, 2, 4].map((index) => parseInt(hex.slice(index, index + 2), 16));
+  }
+  const rgb = /^rgba?\((\d+),(\d+),(\d+)/i.exec(text.replace(/\s+/g, ""));
+  if (!rgb) return null;
+  return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+}
+
+function channelLuminance(channels) {
+  const linear = channels.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(left, right) {
+  const lighter = Math.max(left, right);
+  const darker = Math.min(left, right);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Hex or rgb()/rgba(). Anything else is rejected so it cannot be painted. */
+export function buttonColor(value) {
+  const text = String(value ?? "").trim();
+  if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(text)) {
+    return text.toLowerCase();
+  }
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*((?:0|1)(?:\.0+)?|0?\.\d+)\s*)?\)$/i.exec(text);
+  if (!rgb) return "";
+  const channels = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  if (channels.some((channel) => channel > 255)) return "";
+  if (rgb[4] == null) return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
+  const alpha = Number(rgb[4]);
+  if (!(alpha >= 0 && alpha <= 1)) return "";
+  return `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`;
+}
+
+function looksLikeColor(token) {
+  return /^#|^rgba?\(/i.test(String(token ?? "").trim());
+}
+
+function looksLikeSize(token) {
+  return /^\d+(?:[.,]\d+)?\s*(?:bytes|[kmgt]?b)?$/i.test(String(token ?? "").trim());
+}
+
+export function normalizeButtonStyle(value) {
+  const key = String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (key === "link" || key === "view" || key === "viewpage") return "link";
+  if (key === "download") return "download";
+  if (key === "readmore") return "readmore";
+  if (key === "plain") return "plain";
+  return "";
+}
+
+/** Ink that stays readable on `color`. Invalid colors use the default red. */
+export function buttonInk(color) {
+  const fill = channelLuminance(buttonChannels(buttonColor(color) || DEFAULT_BUTTON_COLOR));
+  const light = channelLuminance(buttonChannels(BUTTON_INK_LIGHT));
+  const dark = channelLuminance(buttonChannels(BUTTON_INK_DARK));
+  return contrastRatio(fill, light) >= contrastRatio(fill, dark) ? BUTTON_INK_LIGHT : BUTTON_INK_DARK;
+}
+
+/** Text color for a filled pill, or for a plain pill sitting on the card. */
+export function buttonText(color, style) {
+  const fill = buttonColor(color) || DEFAULT_BUTTON_COLOR;
+  if ((normalizeButtonStyle(style) || "link") !== "plain") return buttonInk(fill);
+  const onCard = contrastRatio(channelLuminance(buttonChannels(fill)), channelLuminance(buttonChannels(BUTTON_CARD)));
+  return onCard >= 4.5 ? fill : BUTTON_INK_LIGHT;
+}
+
+function splitPipes(raw) {
+  const cells = [];
+  let buf = "";
+  for (let i = 0; i < raw.length; i += 1) {
+    if (raw[i] === "\\" && raw[i + 1] === "|") {
+      buf += "|";
+      i += 1;
+      continue;
+    }
+    if (raw[i] === "|") {
+      cells.push(buf.trim());
+      buf = "";
+      continue;
+    }
+    buf += raw[i];
+  }
+  cells.push(buf.trim());
+  return cells;
+}
+
+function cleanSize(value) {
+  return clip(value, 40).replace(/[<>]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * `[[button: Label | https://url | #color | style | size]]`
+ * Color, style, and size may be omitted. A bad color falls back to the
+ * default red. A URL that is not http(s) is not a button.
+ */
+export function parseButtonSpec(raw) {
+  const parts = splitPipes(String(raw ?? ""));
+  if (parts.length < 2) return null;
+  const label = clip(parts[0].replace(/\s+/g, " ").trim(), 200);
+  const url = safeLink(parts[1]);
+  if (!label || !url) return null;
+  let color = "";
+  let style = "";
+  let size = "";
+  const extra = parts.slice(2).map((part) => part.trim()).filter(Boolean);
+  if (extra.length === 1) {
+    const token = extra[0];
+    const asStyle = normalizeButtonStyle(token);
+    const asColor = buttonColor(token);
+    if (asStyle) style = asStyle;
+    else if (asColor) color = asColor;
+    else if (!looksLikeColor(token) && looksLikeSize(token)) size = cleanSize(token);
+  } else if (extra.length >= 2) {
+    const asColor = buttonColor(extra[0]);
+    if (asColor) color = asColor;
+    if (!looksLikeColor(extra[0]) && normalizeButtonStyle(extra[0])) {
+      style = normalizeButtonStyle(extra[0]);
+      size = cleanSize(extra.slice(1).join(" "));
+    } else {
+      style = normalizeButtonStyle(extra[1]) || "";
+      if (extra.length > 2) size = cleanSize(extra.slice(2).join(" "));
+    }
+  }
+  return {
+    type: "button",
+    label,
+    url,
+    color: color || DEFAULT_BUTTON_COLOR,
+    style: style || "link",
+    size,
+  };
+}
+
+/** Markdown for one button. Empty when the label or URL cannot be kept. */
+export function formatButton(spec) {
+  const label = clip(spec?.label, 200).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  const url = safeLink(spec?.url);
+  if (!label || !url) return "";
+  const color = buttonColor(spec?.color);
+  const style = normalizeButtonStyle(spec?.style) || "link";
+  const size = cleanSize(spec?.size);
+  const fields = [label.replace(/\|/g, "\\|"), url];
+  const colored = Boolean(color) && color !== DEFAULT_BUTTON_COLOR;
+  const styled = style !== "link";
+  if (colored || styled || size) fields.push(color || DEFAULT_BUTTON_COLOR);
+  if (styled || size) fields.push(style);
+  if (size) fields.push(size.replace(/\|/g, "\\|"));
+  return `[[button: ${fields.join(" | ")}]]`;
+}
+
+function decodeBasic(value) {
+  return String(value ?? "")
+    .replace(/&nbsp;|&#160;|&#xa0;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, digits) => {
+      const code = Number(digits);
+      if (!Number.isFinite(code) || code < 32 || code > 0x10ffff) return "";
+      return String.fromCodePoint(code);
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, digits) => {
+      const code = parseInt(digits, 16);
+      if (!Number.isFinite(code) || code < 32 || code > 0x10ffff) return "";
+      return String.fromCodePoint(code);
+    });
+}
+
+function attrValue(attrs, name) {
+  const match = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i").exec(attrs);
+  return match ? decodeBasic(match[2] ?? match[3] ?? "").trim() : "";
+}
+
+function plainText(html) {
+  return decodeBasic(String(html).replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+const PIXAROMA_STYLES = [
+  ["pix-note-dl", "download"],
+  ["pix-note-vp", "link"],
+  ["pix-note-rm", "readmore"],
+  ["pix-note-btn-plain", "plain"],
+];
+
+/** Pull label, href, color, and style out of one pasted button span. */
+export function readPixaromaButton(chunk) {
+  const anchor = /<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(String(chunk ?? ""));
+  if (!anchor) return null;
+  const classes = attrValue(anchor[1], "class").toLowerCase().split(/\s+/).filter(Boolean);
+  const style = PIXAROMA_STYLES.find(([name]) => classes.includes(name))?.[1] || "";
+  if (!style) return null;
+  const href = attrValue(anchor[1], "href").replace(/\s+/g, "");
+  const background = /background-color\s*:\s*([^;]+)/i.exec(attrValue(anchor[1], "style"));
+  const color = background ? buttonColor(decodeBasic(background[1]).trim()) : "";
+  const sizeMatch = /<span\b[^>]*\bclass\s*=\s*(["'])[^"']*\bpix-note-btnsize\b[^"']*\1[^>]*>([\s\S]*?)<\/span>/i.exec(anchor[2]);
+  const size = sizeMatch ? cleanSize(plainText(sizeMatch[2])) : "";
+  const labelHtml = sizeMatch ? anchor[2].replace(sizeMatch[0], " ") : anchor[2];
+  const label = clip(plainText(labelHtml), 200);
+  return {
+    label,
+    url: safeLink(href),
+    color,
+    style,
+    size,
+  };
+}
+
+function spanOpenAt(text, classIndex) {
+  const start = text.slice(0, classIndex).toLowerCase().lastIndexOf("<span");
+  if (start < 0) return -1;
+  if (text.slice(start, classIndex).includes(">")) return -1;
+  return start;
+}
+
+function findSpanEnd(text, start) {
+  const tags = /<\/?span\b[^>]*>/gi;
+  tags.lastIndex = start;
+  let depth = 0;
+  let match = tags.exec(text);
+  while (match) {
+    if (match[0].startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) return match.index + match[0].length;
+    } else {
+      depth += 1;
+    }
+    match = tags.exec(text);
+  }
+  return -1;
+}
+
+function pixaromaReplacement(chunk) {
+  const button = readPixaromaButton(chunk);
+  if (button?.url) {
+    const syntax = formatButton(button);
+    if (syntax) return syntax;
+  }
+  if (button?.label) return button.label;
+  return plainText(chunk);
+}
+
+function replacePixaromaBlocks(text) {
+  const needle = "pix-note-btnblock";
+  if (!text.toLowerCase().includes(needle)) return text;
+  const lower = text.toLowerCase();
+  let out = "";
+  let cursor = 0;
+  let from = 0;
+  while (from < text.length) {
+    const at = lower.indexOf(needle, from);
+    if (at < 0) break;
+    const start = spanOpenAt(text, at);
+    if (start < 0 || start < cursor) {
+      from = at + needle.length;
+      continue;
+    }
+    const end = findSpanEnd(text, start);
+    if (end < 0 || end - start > 8000) {
+      from = at + needle.length;
+      continue;
+    }
+    out += text.slice(cursor, start);
+    out += pixaromaReplacement(text.slice(start, end));
+    cursor = end;
+    from = end;
+  }
+  return out + text.slice(cursor);
+}
+
+function unwrapButtonWrappers(text) {
+  return text.replace(/<(p|div)\b[^>]*>([\s\S]*?)<\/\1>/gi, (full, _tag, inner) => {
+    if (!/\[\[button:/i.test(inner)) return full;
+    const leftover = inner
+      .replace(/\[\[button:[\s\S]*?\]\]/gi, "")
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, "")
+      .replace(/\s+/g, "");
+    if (leftover) return full;
+    return inner.replace(/&nbsp;|&#160;|&#xa0;/gi, " ").replace(/[ \t]{2,}/g, " ").trim();
+  });
+}
+
+/**
+ * Turn pasted Pixaroma button HTML into button syntax. Only the label,
+ * href, color, and style are kept. The HTML itself is never mounted.
+ * Fenced code, inline code, script, and style are left unchanged.
+ */
+export function translateButtonMarkup(text) {
+  const source = String(text ?? "");
+  const protectedRegion = /```[\s\S]*?```|`[^`\n]+`|<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>/gi;
+  let out = "";
+  let last = 0;
+  let match = protectedRegion.exec(source);
+  const rewrite = (region) => unwrapButtonWrappers(unwrapButtonWrappers(replacePixaromaBlocks(region)));
+  while (match) {
+    out += rewrite(source.slice(last, match.index));
+    out += match[0];
+    last = match.index + match[0].length;
+    match = protectedRegion.exec(source);
+  }
+  return out + rewrite(source.slice(last));
+}
+
 export function parseInline(text) {
   const spans = [];
   const src = clip(text, BODY_LIMIT);
@@ -570,6 +894,18 @@ export function parseInline(text) {
       }
     }
     if (src[i] === "[") {
+      const opener = /^\[\[button:/i.exec(src.slice(i));
+      if (opener) {
+        const end = src.indexOf("]]", i + opener[0].length);
+        if (end > i && !src.slice(i, end).includes("\n")) {
+          const spec = parseButtonSpec(src.slice(i + opener[0].length, end));
+          flush();
+          if (spec) spans.push(spec);
+          else spans.push({ type: "text", text: src.slice(i, end + 2) });
+          i = end + 1;
+          continue;
+        }
+      }
       const tone = /^(teal|green|amber|glow)\]/.exec(src.slice(i + 1));
       if (tone) {
         const name = tone[1];
@@ -639,8 +975,22 @@ function isDivider(cells) {
   return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function buttonGroup(spans) {
+  let count = 0;
+  for (const span of spans) {
+    if (span.type === "button") {
+      count += 1;
+      continue;
+    }
+    if (span.type === "br") continue;
+    if (span.type === "text" && !String(span.text || "").trim()) continue;
+    return null;
+  }
+  return count ? spans.filter((span) => span.type === "button") : null;
+}
+
 export function parseMarkdown(text) {
-  const lines = clip(text, BODY_LIMIT).replace(/\r\n?/g, "\n").split("\n");
+  const lines = translateButtonMarkup(clip(text, BODY_LIMIT)).replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let paragraph = [];
   let list = null;
@@ -653,7 +1003,9 @@ export function parseMarkdown(text) {
       if (index) spans.push({ type: "br" });
       spans.push(...parseInline(line));
     });
-    blocks.push({ type: "paragraph", spans });
+    const group = buttonGroup(spans);
+    if (group) blocks.push({ type: "buttons", items: group });
+    else blocks.push({ type: "paragraph", spans });
     paragraph = [];
   };
   const flushList = () => {
@@ -763,10 +1115,63 @@ function paintSpans(doc, parent, spans) {
         link.rel = "noopener noreferrer";
         parent.append(link);
       }
+    } else if (span.type === "button") {
+      paintButton(doc, parent, span);
     } else {
       parent.append(doc.createTextNode(span.text || ""));
     }
   }
+}
+
+const BUTTON_ICONS = {
+  download: "M6 1.8v5.2M3.7 5.1 6 7.6 8.3 5.1M2.4 9.4h7.2",
+  link: "M4.2 7.8 7.8 4.2M5.2 3.6h3.4v3.2M3.2 5.6v3.4h3.4",
+  readmore: "M2.2 2.2h3.5v7.6H2.2zM5.7 2.2H9.6v7.6H5.7",
+};
+
+function paintButton(doc, parent, span) {
+  const url = safeLink(span?.url);
+  if (!url) {
+    parent.append(doc.createTextNode(span?.label || ""));
+    return;
+  }
+  const styleName = normalizeButtonStyle(span.style) || "link";
+  const color = buttonColor(span.color) || DEFAULT_BUTTON_COLOR;
+  const text = buttonText(color, styleName);
+  const link = element(doc, "a");
+  link.className = `devil-btn devil-btn-${styleName}`;
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  if (link.style && typeof link.style.setProperty === "function") {
+    link.style.setProperty("--devil-btn-bg", color);
+    link.style.setProperty("--devil-btn-fg", text);
+    link.style.setProperty("--devil-btn-hover-fg", buttonInk(color));
+  }
+  const icon = BUTTON_ICONS[styleName];
+  if (icon && typeof doc.createElementNS === "function") {
+    const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 12 12");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "devil-btnicon");
+    const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", icon);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.4");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    link.append(svg);
+  }
+  link.append(doc.createTextNode(span.label || url));
+  const size = cleanSize(span.size);
+  if (size) {
+    const badge = element(doc, "span", size);
+    badge.className = "devil-btnsize";
+    link.append(badge);
+  }
+  parent.append(link);
 }
 
 /** Build Markdown with text nodes. `parent` is not cleared. */
@@ -781,6 +1186,11 @@ export function mountMarkdown(doc, parent, text) {
       const paragraph = element(doc, "p");
       paintSpans(doc, paragraph, block.spans);
       parent.append(paragraph);
+    } else if (block.type === "buttons") {
+      const row = element(doc, "div");
+      row.className = "devil-btnrow";
+      for (const item of block.items) paintButton(doc, row, item);
+      parent.append(row);
     } else if (block.type === "list") {
       const list = element(doc, block.ordered ? "ol" : "ul");
       for (const item of block.items) {
