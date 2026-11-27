@@ -734,11 +734,12 @@ class ShippedFileTests(unittest.TestCase):
             self.assertNotIn(html, text, path.name)
             self.assertNotIn("insert" + "AdjacentHTML", text, path.name)
 
-    def test_version_is_1_1_4(self):
+    def test_version_is_1_2_0(self):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "1.1.4"', text)
+        self.assertIn('version = "1.2.0"', text)
         self.assertIn("Favorite", text)
         self.assertIn("Workflow Helper", text)
+        self.assertIn("Workflow Note", text)
 
     def test_images_are_still_the_tracked_pngs(self):
         self.assertTrue((ROOT / "icon.png").is_file())

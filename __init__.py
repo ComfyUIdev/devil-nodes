@@ -10,14 +10,19 @@ from .py.favorite import NODE_CLASS_MAPPINGS as _FAVORITE_CLASS_MAPPINGS
 from .py.favorite import NODE_DISPLAY_NAME_MAPPINGS as _FAVORITE_DISPLAY_NAME_MAPPINGS
 from .py.workflow_helper import NODE_CLASS_MAPPINGS as _HELPER_CLASS_MAPPINGS
 from .py.workflow_helper import NODE_DISPLAY_NAME_MAPPINGS as _HELPER_DISPLAY_NAME_MAPPINGS
+from .py.workflow_note import NODE_CLASS_MAPPINGS as _NOTE_CLASS_MAPPINGS
+from .py.workflow_note import NODE_DISPLAY_NAME_MAPPINGS as _NOTE_DISPLAY_NAME_MAPPINGS
+from .py.workflow_note import setup_routes as setup_note_routes
 
 NODE_CLASS_MAPPINGS = {}
 NODE_CLASS_MAPPINGS.update(_FAVORITE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_HELPER_CLASS_MAPPINGS)
+NODE_CLASS_MAPPINGS.update(_NOTE_CLASS_MAPPINGS)
 
 NODE_DISPLAY_NAME_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS.update(_FAVORITE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(_HELPER_DISPLAY_NAME_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(_NOTE_DISPLAY_NAME_MAPPINGS)
 
 # Every .js file under this directory is served to the ComfyUI frontend.
 WEB_DIRECTORY = "./web"
@@ -30,6 +35,11 @@ except Exception as exc:
     # Favorite still loads when the download routes cannot register
     # (for example while this file is imported outside ComfyUI).
     print(f"[devil-nodes] Workflow Helper downloads were not registered: {exc}")
+
+try:
+    setup_note_routes()
+except Exception as exc:
+    print(f"[devil-nodes] Workflow Note paths were not registered: {exc}")
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",
