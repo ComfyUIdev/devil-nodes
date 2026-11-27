@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 - 2026-11-27
+
+- Add Workflow Note and Workflow Note Tile. The note is saved in the workflow: title, subtitle, author, a Markdown how-to, model rows, pack rows, and links. Queueing a prompt does not run it.
+- Card, banner, and info tile are three layouts. The tile serializes as Workflow Note Tile, opens the full note, and can be resized from the grip or with the arrow keys.
+- Model rows are plain download links. Check files marks each file found or missing, including extra model folders and the clip / unet folder aliases. A single subfolder match can be applied to the loaders in the graph.
+- Pack rows can be detected from the graph, including subgraphs. A missing probe class offers Update through ComfyUI Manager or the Registry. devil-nodes is listed with its Registry page.
+
 ## 1.1.4 - 2026-11-17
 
 - Workflow Helper Hugging Face downloads work with huggingface_hub 2.2. The progress meter accepts the tqdm methods Xet uses, and the percent does not pass 100 or move backwards.

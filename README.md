@@ -6,7 +6,9 @@ ComfyUI nodes by [ComfyUIdev](https://github.com/ComfyUIdev).
 
 **Workflow Helper** is a shareable card saved inside the workflow. Queueing a prompt does not run it. You fill it in when you create or share a graph: how to use it, which models to download, which custom node packs it needs, and your links. On another machine the card shows which models and packs are already there, which are missing, and downloads a missing model into the matching ComfyUI models folder. Card, banner, and info tile are three ways to show that one card.
 
-Favorite is frontend-only. It has no inputs, no outputs, and it does not run. Workflow Helper's download buttons talk to this ComfyUI in the background.
+**Workflow Note** is a how-to card for the same kind of sharing, with a subtitle, an author line, and an optional accent color. Model rows open their download link in a new tab. Workflow Helper is still the node that downloads into a models folder. Card, banner, and info tile are three ways to show the note.
+
+Favorite is frontend-only. It has no inputs, no outputs, and it does not run. Workflow Helper's download buttons talk to this ComfyUI in the background. Workflow Note only reads the model folders this ComfyUI already has configured.
 
 ![Devil Nodes](banner.png)
 
@@ -98,6 +100,39 @@ Tokens are not printed in the progress line. `b2:` downloads need rclone configu
 
 The card JSON is stored on the node, so it comes back with the workflow, including copy, paste, and the API format.
 
+## Workflow Note
+
+Workflow Note is a how-to saved inside the workflow. Queueing a prompt does not run it. In the node menu, open **Devil Nodes/Utility** and add **Workflow Note**.
+
+The pencil (or right-click **Edit Workflow Note**) edits the title, subtitle, author, layout, accent color, Markdown how-to, model rows, pack rows, and links. **Card** shows all of that on the node. **Banner** shows the title, and the subtitle and author when they are set. **Info tile** is a short button. Click it to open the full note. Choosing the tile saves the node as **Workflow Note Tile**.
+
+The how-to field accepts headings, lists, bold, italic, code, fenced code, rules, pipe tables, `http(s)` links, tone tags (`[red]`, `[yellow]`, `[green]`, `[teal]`, `[amber]`, `[glow]`), and colored link buttons:
+
+```text
+[[button: Label | https://example.com | #e25b45 | download | 2 GB]]
+```
+
+Button styles are `link`, `download`, `readmore`, and `plain`. Fenced code shows those characters as typed.
+
+| Section | What it stores |
+| --- | --- |
+| Title, subtitle, author | The header. The author line is shown as small caps. |
+| How-to | Markdown, up to 20,000 characters. |
+| Accent | Optional `#rrggbb`. Empty uses devil red `#e25b45`. |
+| Models | File name, folder (`checkpoints`, `loras`, `input`, and the rest of this install), and an `http(s)` download link. |
+| Node packs | Pack name, link, and one node class from that pack. |
+| Links | Label and `http(s)` URL. |
+
+Model rows are grouped under `ComfyUI/models/<folder>` or `ComfyUI/input`. A dot marks each row: found, missing, or not checked. **Check files** looks through the folders this ComfyUI is configured to read, including extra model paths and the folders `clip` / `unet` share with `text_encoders` / `diffusion_models`. An extra directory is listed as “also read from”. **Download** opens the row URL in a new tab. Click the file name to copy it.
+
+When the file is in a subfolder, the row says so and **Use it** writes that path onto the matching loader widgets in this graph, including subgraphs. **Devil Nodes → Workflow Note → Auto-pick found model files** does that on its own when there is a single match. It is on by default.
+
+**Detect from this workflow** adds a pack row for each custom-node module in the graph, including subgraphs. Rows already on the note stay. devil-nodes is listed with its Registry page, `https://registry.comfy.org/publishers/comfyuidev/nodes/devil-nodes`. If the probe class is not registered here, the row offers **Update** (ComfyUI Manager when it is installed, otherwise the Registry) instead of a git clone link.
+
+The note JSON is stored on a hidden widget named `note`, so it comes back with the workflow. Ctrl or Cmd+Enter saves the editor. Esc, Cancel, or a click outside asks before discarding edits.
+
+The card fills the node in the classic UI and in Nodes 2.0. It grows to fit and does not shrink on its own. The tile snaps to a short height when you switch to it. A grip at the bottom-right resizes the node; with the grip focused, the arrow keys resize it and Shift takes one-pixel steps.
+
 ## Requirements
 
 - ComfyUI
@@ -110,6 +145,8 @@ The card JSON is stored on the node, so it comes back with the workflow, includi
 | --- | --- | --- |
 | Favorite | The browser only | Pans and zooms to a saved canvas anchor |
 | Workflow Helper | The browser, plus download routes on this ComfyUI | Shareable card: title, how-to, model downloads, pack checks, links |
+| Workflow Note | The browser, plus a read-only folder list on this ComfyUI | How-to card: title, subtitle, author, model links, pack checks |
+| Workflow Note Tile | The browser, same folder list | The same note as a compact tile |
 
 More nodes can be added under `py/` without changing how Favorite is loaded. See the layout below.
 
@@ -121,10 +158,13 @@ devil-nodes/
   py/favorite.py              Favorite's slot (no backend execution)
   py/workflow_helper.py       Workflow Helper node (card JSON, no prompt)
   py/helper_download.py       download routes into known model folders
+  py/workflow_note.py         Workflow Note and Workflow Note Tile
   web/favorite.js             Favorite
   web/favorite_anchor.js
   web/workflow_helper.js      Workflow Helper card
   web/workflow_helper_card.js card JSON, Markdown, installed-file match
+  web/workflow_note.js        Workflow Note on the graph
+  web/workflow_note_model.js  note JSON, Markdown, file and pack checks
   pyproject.toml
   icon.png
   banner.png
